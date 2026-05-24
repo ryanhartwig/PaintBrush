@@ -38,9 +38,38 @@ end
 -- Factory helpers
 -- ============================================================
 
-local function makeText(outer, str)
+-- Game font capture (call once after world loads)
+local gameFont = nil
+local function captureGameFont()
+    if gameFont then return end
+    pcall(function()
+        local allTb = FindAllOf("TextBlock")
+        if allTb then
+            for _, tb in ipairs(allTb) do
+                if tb:IsValid() then
+                    gameFont = tb.Font
+                    return
+                end
+            end
+        end
+    end)
+end
+
+local function makeText(outer, str, opts)
     local tb = StaticConstructObject(classes.text, outer, newName("Txt"))
     if str then tb:SetText(FText(str)) end
+    -- Apply styling: smaller font, dimmed
+    opts = opts or {}
+    local size = opts.size or 12
+    local opacity = opts.opacity or 0.6
+    if gameFont then
+        pcall(function()
+            local f = gameFont
+            f.Size = size
+            tb:SetFont(f)
+        end)
+    end
+    pcall(function() tb:SetRenderOpacity(opacity) end)
     return tb
 end
 
@@ -138,8 +167,9 @@ local function computeBounds()
     local maxW = 0.92 * vpW
     if panelW > maxW then panelW = maxW end
     local halfW = (panelW / vpW) / 2
-    PANEL.L = 0.5 - halfW
-    PANEL.R = 0.5 + halfW
+    local centerX = 0.523
+    PANEL.L = centerX - halfW
+    PANEL.R = centerX + halfW
 end
 
 -- ============================================================
@@ -151,6 +181,7 @@ local rootWidget = nil
 local modalBlocker = nil
 local onApplyCallback = nil
 local onSelectCallback = nil
+local selectedMaterialPath = nil  -- must be before buildUI so renderPage can see it
 
 -- Category filter state (persists across open/close for "remember position")
 local CATEGORIES = {
@@ -164,7 +195,7 @@ local CATEGORIES = {
     "Interior",
     "Exterior",
     "Other",
-    "ALL (slow)",
+    "ALL",
 }
 
 local categoryButtons = {}
@@ -176,6 +207,10 @@ local savedPage = 1                        -- persists across open/close
 local BRUSH_SIZES = { {label = "Small (1x1)", radius = 0}, {label = "Large (3x3)", radius = 1} }
 local activeBrushIdx = 1
 local brushButtons = {}
+
+-- Eraser mode (persists, readable via ui.isEraserMode())
+local eraserActive = false
+local eraserButton = nil
 
 -- ============================================================
 -- Favourites persistence
@@ -226,7 +261,7 @@ loadFavourites()
 -- ============================================================
 
 local function isShowAll()
-    return activeCategoryName == "ALL (slow)"
+    return activeCategoryName == "ALL"
 end
 
 local function isFavouritesMode()
@@ -262,6 +297,7 @@ local function buildUI(onApply, onSelect)
 
     registerButtonHook()
     computeBounds()
+    captureGameFont()
 
     local pc = UEHelpers:GetPlayerController()
     if not pc then
@@ -319,9 +355,10 @@ local function buildUI(onApply, onSelect)
     updateCategoryButtonOpacity()
 
     -- --------------------------------------------------------
-    -- Brush size toggles (bottom of sidebar)
+    -- Brush size + eraser toggles (directly below category buttons)
     -- --------------------------------------------------------
     brushButtons = {}
+    local toolY = startY + #CATEGORIES * stepY + 0.02  -- gap after last category
 
     local function updateBrushButtonOpacity()
         for idx, btn in pairs(brushButtons) do
@@ -331,18 +368,6 @@ local function buildUI(onApply, onSelect)
         end
     end
 
-    local brushStartY = 0.85
-    local brushStepY = 0.055
-
-    -- "BRUSH:" label
-    local brushLabel = makeText(root, "BRUSH:")
-    local brushLabelSlot = canvas:AddChildToCanvas(brushLabel)
-    brushLabelSlot:SetAnchors({
-        Minimum = { X = pX(0.02), Y = pY(brushStartY - brushStepY) },
-        Maximum = { X = pX(0.02), Y = pY(brushStartY - brushStepY) },
-    })
-    brushLabelSlot:SetAutoSize(true)
-
     for i, bs in ipairs(BRUSH_SIZES) do
         local idx = i
         local btn = makeButton(root, bs.label, function()
@@ -350,7 +375,7 @@ local function buildUI(onApply, onSelect)
             updateBrushButtonOpacity()
         end)
         brushButtons[idx] = btn
-        local yPos = brushStartY + (i - 1) * brushStepY
+        local yPos = toolY + (i - 1) * stepY
         local btnSlot = canvas:AddChildToCanvas(btn)
         btnSlot:SetAnchors({
             Minimum = { X = pX(0.02), Y = pY(yPos) },
@@ -358,8 +383,27 @@ local function buildUI(onApply, onSelect)
         })
         btnSlot:SetAutoSize(true)
     end
-
     updateBrushButtonOpacity()
+
+    -- Eraser toggle
+    local function updateEraserOpacity()
+        if eraserButton then
+            pcall(function() eraserButton:SetRenderOpacity(eraserActive and 1.0 or 0.3) end)
+        end
+    end
+
+    local eraserY = toolY + #BRUSH_SIZES * stepY
+    eraserButton = makeButton(root, "ERASER", function()
+        eraserActive = not eraserActive
+        updateEraserOpacity()
+    end)
+    local eraserSlot = canvas:AddChildToCanvas(eraserButton)
+    eraserSlot:SetAnchors({
+        Minimum = { X = pX(0.02), Y = pY(eraserY) },
+        Maximum = { X = pX(0.02), Y = pY(eraserY) },
+    })
+    eraserSlot:SetAutoSize(true)
+    updateEraserOpacity()
 
     -- --------------------------------------------------------
     -- Right panel: scrollable material list (built per category)
@@ -419,31 +463,54 @@ local function buildUI(onApply, onSelect)
 
         -- Page info header
         local pageInfo = makeText(root, string.format(
-            "%d materials — Page %d/%d", #filteredMats, currentPage, totalPages))
+            "%d materials — Page %d/%d", #filteredMats, currentPage, totalPages),
+            {size=11, opacity=0.35})
         listVBox:AddChild(pageInfo)
 
-        -- PREV / NEXT buttons row
+        -- Page navigation: [1] [3] [4] [5] [6] [7] [12]
+        -- Jump-back on left (clamped), 5 sequential centered, jump-forward on right (clamped)
         if totalPages > 1 then
             local navRow = makeHBox(root)
-            if currentPage > 1 then
-                local prevBtn = makeButton(root, "PREV", function()
-                    currentPage = currentPage - 1
+
+            local function addPageBtn(p)
+                local pageNum = p
+                local pageBtn = makeButton(root, tostring(p), function()
+                    currentPage = pageNum
+                    savedPage = currentPage
                     renderPage()
                 end)
-                navRow:AddChildToHorizontalBox(prevBtn)
-            end
-
-            local navSpacer = StaticConstructObject(classes.sizeBox, root, newName("NavSp"))
-            pcall(function() navSpacer:SetMinDesiredWidth(10) end)
-            navRow:AddChildToHorizontalBox(navSpacer)
-
-            if currentPage < totalPages then
-                local nextBtn = makeButton(root, "NEXT", function()
-                    currentPage = currentPage + 1
-                    renderPage()
+                pcall(function()
+                    pageBtn:SetRenderOpacity(p == currentPage and 1.0 or 0.4)
                 end)
-                navRow:AddChildToHorizontalBox(nextBtn)
+                navRow:AddChildToHorizontalBox(pageBtn)
             end
+
+            -- Jump back: current - 5, clamped to 1
+            local jumpBack = math.max(1, currentPage - 5)
+
+            -- Center window: 5 sequential pages centered on current
+            local startP = math.max(1, currentPage - 2)
+            local endP = math.min(totalPages, startP + 4)
+            startP = math.max(1, endP - 4)
+
+            -- Jump forward: current + 5, clamped to totalPages
+            local jumpFwd = math.min(totalPages, currentPage + 5)
+
+            -- Left jump (only if it's outside the center window)
+            if jumpBack < startP then
+                addPageBtn(jumpBack)
+            end
+
+            -- Center window
+            for p = startP, endP do
+                addPageBtn(p)
+            end
+
+            -- Right jump (only if it's outside the center window)
+            if jumpFwd > endP then
+                addPageBtn(jumpFwd)
+            end
+
             listVBox:AddChild(navRow)
         end
 
@@ -457,11 +524,21 @@ local function buildUI(onApply, onSelect)
 
             -- Material name (clip from start if too long, show the end)
             local MAX_NAME_LEN = 40
+            local isSelected = (mat.path == selectedMaterialPath)
+            if i == startIdx then
+                print(string.format("[PaintBrush] highlight check: selected=%s, first mat=%s, match=%s\n",
+                    tostring(selectedMaterialPath and selectedMaterialPath:sub(-30) or "nil"),
+                    mat.path:sub(-30), tostring(isSelected)))
+            end
             local displayName = mat.name
             if #displayName > MAX_NAME_LEN then
                 displayName = "..." .. displayName:sub(-(MAX_NAME_LEN - 3))
             end
-            local nameText = makeText(root, displayName)
+            if isSelected then
+                displayName = displayName .. "  <<<"
+            end
+            local nameText = makeText(root, displayName,
+                {size=12, opacity = isSelected and 1.0 or 0.6})
             row:AddChildToHorizontalBox(nameText)
 
             -- Fill spacer
@@ -603,6 +680,14 @@ end
 
 function ui.getBrushRadius()
     return BRUSH_SIZES[activeBrushIdx].radius
+end
+
+function ui.isEraserMode()
+    return eraserActive
+end
+
+function ui.setSelectedMaterial(path)
+    selectedMaterialPath = path
 end
 
 -- ============================================================

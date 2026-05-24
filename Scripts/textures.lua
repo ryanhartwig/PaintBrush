@@ -5,7 +5,7 @@ local textures = {}
 local cache = {}
 local anchor = nil  -- hidden widget that roots textures to prevent GC
 
-local BG_PATH = "C:\\Users\\ryguy\\OneDrive\\Desktop\\nexusassets\\paintbrush\\paintbrush-background.png"
+local BG_PATH = config.ModDir .. "assets/background.png"
 
 function textures.load()
     local krl = StaticFindObject("/Script/Engine.Default__KismetRenderingLibrary")

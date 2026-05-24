@@ -100,39 +100,92 @@ function painter.rebuild(base)
     pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
 end
 
--- Apply a material to a single cell on a base
+-- Apply a material to a single cell (records its own undo entry + rebuilds)
 function painter.apply(base, cellCoords, materialPath)
+    painter.applyBatch(base, {cellCoords}, materialPath)
+end
+
+-- Apply a material to multiple cells as ONE undo entry + ONE rebuild
+function painter.applyBatch(base, cellCoordsList, materialPath)
     local key = baseKey(base)
 
-    -- Record previous state for undo
-    local prevMat = nil
-    if paintedCells[key] then
-        prevMat = findCellMaterial(paintedCells[key], cellCoords)
-    end
-    table.insert(undoStack, {
-        baseKey          = key,
-        base             = base,
-        cellCoords       = {X = cellCoords.X, Y = cellCoords.Y, Z = cellCoords.Z},
-        previousMaterial = prevMat,
-    })
-
-    -- Upsert painted cell
     if not paintedCells[key] then
         paintedCells[key] = {base = base, cells = {}}
     end
     local baseData = paintedCells[key]
 
-    -- Remove old entry for this cell (if any), then insert new one
-    removeCell(baseData, cellCoords)
-    table.insert(baseData.cells, {
-        cellCoords   = {X = cellCoords.X, Y = cellCoords.Y, Z = cellCoords.Z},
-        materialPath = materialPath,
+    -- Record undo: snapshot previous state of ALL cells in the batch
+    local prevStates = {}
+    for _, cellCoords in ipairs(cellCoordsList) do
+        table.insert(prevStates, {
+            cellCoords       = {X = cellCoords.X, Y = cellCoords.Y, Z = cellCoords.Z},
+            previousMaterial = findCellMaterial(baseData, cellCoords),
+        })
+    end
+    table.insert(undoStack, {
+        baseKey    = key,
+        base       = base,
+        batch      = prevStates,
     })
+    if #undoStack > (require("config").MaxUndoStack or 50) then
+        table.remove(undoStack, 1)
+    end
+
+    -- Upsert all cells
+    for _, cellCoords in ipairs(cellCoordsList) do
+        removeCell(baseData, cellCoords)
+        table.insert(baseData.cells, {
+            cellCoords   = {X = cellCoords.X, Y = cellCoords.Y, Z = cellCoords.Z},
+            materialPath = materialPath,
+        })
+    end
 
     painter.rebuild(base)
 end
 
--- Undo the last paint action; returns true if something was undone, false otherwise
+-- Erase (remove paint from) multiple cells as ONE undo entry + ONE rebuild
+function painter.eraseBatch(base, cellCoordsList)
+    local key = baseKey(base)
+
+    if not paintedCells[key] then return end
+    local baseData = paintedCells[key]
+
+    -- Record undo: snapshot previous materials so they can be restored
+    local prevStates = {}
+    local anyPainted = false
+    for _, cellCoords in ipairs(cellCoordsList) do
+        local prevMat = findCellMaterial(baseData, cellCoords)
+        table.insert(prevStates, {
+            cellCoords       = {X = cellCoords.X, Y = cellCoords.Y, Z = cellCoords.Z},
+            previousMaterial = prevMat,
+        })
+        if prevMat then anyPainted = true end
+    end
+
+    if not anyPainted then return end
+
+    table.insert(undoStack, {
+        baseKey    = key,
+        base       = base,
+        batch      = prevStates,
+    })
+    if #undoStack > (require("config").MaxUndoStack or 50) then
+        table.remove(undoStack, 1)
+    end
+
+    -- Remove all cells
+    for _, cellCoords in ipairs(cellCoordsList) do
+        removeCell(baseData, cellCoords)
+    end
+
+    if #baseData.cells == 0 then
+        paintedCells[key] = nil
+    end
+
+    painter.rebuild(base)
+end
+
+-- Undo the last paint action (supports batch); returns true if something was undone
 function painter.undo()
     if #undoStack == 0 then
         return false
@@ -147,15 +200,16 @@ function painter.undo()
     end
     local baseData = paintedCells[key]
 
-    -- Remove the cell that was painted by this action
-    removeCell(baseData, action.cellCoords)
-
-    -- If there was a previous material, restore it
-    if action.previousMaterial then
-        table.insert(baseData.cells, {
-            cellCoords   = {X = action.cellCoords.X, Y = action.cellCoords.Y, Z = action.cellCoords.Z},
-            materialPath = action.previousMaterial,
-        })
+    -- Restore all cells in the batch
+    local batch = action.batch or {}
+    for _, prev in ipairs(batch) do
+        removeCell(baseData, prev.cellCoords)
+        if prev.previousMaterial then
+            table.insert(baseData.cells, {
+                cellCoords   = {X = prev.cellCoords.X, Y = prev.cellCoords.Y, Z = prev.cellCoords.Z},
+                materialPath = prev.previousMaterial,
+            })
+        end
     end
 
     -- Clean up empty base entries
@@ -163,7 +217,7 @@ function painter.undo()
         paintedCells[key] = nil
     end
 
-    -- Guard against stale base references (e.g. after save reload)
+    -- Guard against stale base references
     if base:IsValid() then
         painter.rebuild(base)
     end

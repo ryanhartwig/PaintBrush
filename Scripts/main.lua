@@ -25,8 +25,19 @@ local function rebuildBrowseList()
     print(string.format("[PaintBrush] %d browseable materials (filtered from %d)\n", #browseMats, #allMats))
 end
 
+-- Ensure state is loaded before any paint/erase operation.
+-- Handles both initial game load AND mod restart (where RegisterLoadMapPostHook doesn't fire).
+local function ensureStateLoaded()
+    if _stateLoaded then return end
+    rebuildBrowseList()
+    state.load()
+    _stateLoaded = true
+    print("[PaintBrush] State lazy-loaded\n")
+end
+
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 RegisterLoadMapPostHook(function(engine, world)
+    _stateLoaded = false  -- reset so next action triggers fresh load
     ExecuteWithDelay(3000, function()
         ExecuteInGameThread(function()
             painter.setPaintedCells({})
@@ -87,6 +98,7 @@ RegisterKeyBind(Key.O, function()
             return
         end
 
+        ensureStateLoaded()
         local info = detection.getTargetInfo()
         if not info then
             print("[PaintBrush] Not aiming at a base surface\n")
@@ -95,6 +107,9 @@ RegisterKeyBind(Key.O, function()
 
         pendingTarget = info
         textures.load()
+        local curPath = lastSelectedPath
+        ui.setSelectedMaterial(curPath)
+        print(string.format("[PaintBrush] Opening UI with selected: %s\n", tostring(curPath)))
 
         -- onApply: paint without closing UI (preview different materials)
         local function onApply(matPath, matName)
@@ -103,13 +118,15 @@ RegisterKeyBind(Key.O, function()
             if pendingTarget and pendingTarget.base:IsValid() then
                 local r = getBrushRadius()
                 local cc = pendingTarget.cellCoords
+                local cells = {}
                 for dx = -r, r do
                     for dy = -r, r do
                         for dz = -r, r do
-                            painter.apply(pendingTarget.base, {X=cc.X+dx, Y=cc.Y+dy, Z=cc.Z+dz}, matPath)
+                            table.insert(cells, {X=cc.X+dx, Y=cc.Y+dy, Z=cc.Z+dz})
                         end
                     end
                 end
+                painter.applyBatch(pendingTarget.base, cells, matPath)
                 print(string.format("[PaintBrush] Applied %s (UI stays open)\n", matName))
                 if config.AutoSave then
                     state.save()
@@ -121,6 +138,7 @@ RegisterKeyBind(Key.O, function()
         local function onSelect(matPath, matName)
             lastSelectedPath = matPath
             lastSelectedName = matName
+            ui.setSelectedMaterial(matPath)
             print(string.format("[PaintBrush] Selected: %s\n", matName))
             pendingTarget = nil
         end
@@ -129,34 +147,43 @@ RegisterKeyBind(Key.O, function()
     end)
 end)
 
--- P = paint with selected material (dev hotkey cycling)
+-- P = paint or erase with selected material
 RegisterKeyBind(Key[config.PaintKey], function()
     ExecuteInGameThread(function()
+        ensureStateLoaded()
         local info = detection.getTargetInfo()
         if not info then
             print("[PaintBrush] Not aiming at a base surface\n")
             return
         end
-        local matPath, matName = getSelectedMaterial()
-        if not matPath then
-            print("[PaintBrush] No materials loaded yet\n")
-            return
-        end
+
         local r = getBrushRadius()
         local cc = info.cellCoords
-
-        -- Paint center cell + neighbors within brush radius
+        local cells = {}
         for dx = -r, r do
             for dy = -r, r do
                 for dz = -r, r do
-                    painter.apply(info.base, {X=cc.X+dx, Y=cc.Y+dy, Z=cc.Z+dz}, matPath)
+                    table.insert(cells, {X=cc.X+dx, Y=cc.Y+dy, Z=cc.Z+dz})
                 end
             end
         end
 
         local size = (r * 2 + 1)
-        print(string.format("[PaintBrush] Painted %dx%dx%d at (%d,%d,%d) with %s\n",
-            size, size, size, cc.X, cc.Y, cc.Z, matName))
+
+        if ui.isEraserMode() then
+            painter.eraseBatch(info.base, cells)
+            print(string.format("[PaintBrush] Erased %dx%dx%d at (%d,%d,%d)\n",
+                size, size, size, cc.X, cc.Y, cc.Z))
+        else
+            local matPath, matName = getSelectedMaterial()
+            if not matPath then
+                print("[PaintBrush] No material selected\n")
+                return
+            end
+            painter.applyBatch(info.base, cells, matPath)
+            print(string.format("[PaintBrush] Painted %dx%dx%d at (%d,%d,%d) with %s\n",
+                size, size, size, cc.X, cc.Y, cc.Z, matName))
+        end
         if config.AutoSave then
             state.save()
         end
@@ -166,6 +193,7 @@ end)
 -- Z = undo
 RegisterKeyBind(Key[config.UndoKey], function()
     ExecuteInGameThread(function()
+        ensureStateLoaded()
         local undone = painter.undo()
         if undone then
             print("[PaintBrush] Undo successful\n")
