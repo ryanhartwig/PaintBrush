@@ -1,0 +1,14 @@
+# PaintBrush Configuration
+
+# Keybinds
+PaintKey=P
+UndoKey=Z
+
+# Behavior
+TraceDistance=5000
+MaxUndoStack=50
+AutoSave=true
+
+# UI
+ShowMaterialPaths=false
+SwatchSize=48
