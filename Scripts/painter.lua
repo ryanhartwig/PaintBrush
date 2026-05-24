@@ -185,6 +185,13 @@ function painter.eraseBatch(base, cellCoordsList)
     painter.rebuild(base)
 end
 
+-- Pop the top undo entry and return it (without applying). Returns nil if empty.
+-- Used by sync to extract reverse operations before sending to host.
+function painter.popUndo()
+    if #undoStack == 0 then return nil end
+    return table.remove(undoStack, #undoStack)
+end
+
 -- Undo the last paint action (supports batch); returns true if something was undone
 function painter.undo()
     if #undoStack == 0 then

@@ -5,6 +5,7 @@ local state     = require("state")
 local materials = require("materials")
 local textures  = require("textures")
 local ui        = require("ui")
+local sync      = require("sync")
 
 local _stateLoaded = false
 
@@ -45,6 +46,8 @@ RegisterLoadMapPostHook(function(engine, world)
             rebuildBrowseList()
             state.load()
             _stateLoaded = true
+            -- Request state from host in case we're a client joining
+            sync.requestState()
             print("[PaintBrush] State loaded for current save\n")
         end)
     end)
@@ -126,11 +129,8 @@ RegisterKeyBind(Key.O, function()
                         end
                     end
                 end
-                painter.applyBatch(pendingTarget.base, cells, matPath)
+                sync.sendPaint(pendingTarget.base, cells, matPath)
                 print(string.format("[PaintBrush] Applied %s (UI stays open)\n", matName))
-                if config.AutoSave then
-                    state.save()
-                end
             end
         end
 
@@ -171,7 +171,7 @@ RegisterKeyBind(Key[config.PaintKey], function()
         local size = (r * 2 + 1)
 
         if ui.isEraserMode() then
-            painter.eraseBatch(info.base, cells)
+            sync.sendErase(info.base, cells)
             print(string.format("[PaintBrush] Erased %dx%dx%d at (%d,%d,%d)\n",
                 size, size, size, cc.X, cc.Y, cc.Z))
         else
@@ -180,7 +180,7 @@ RegisterKeyBind(Key[config.PaintKey], function()
                 print("[PaintBrush] No material selected\n")
                 return
             end
-            painter.applyBatch(info.base, cells, matPath)
+            sync.sendPaint(info.base, cells, matPath)
             print(string.format("[PaintBrush] Painted %dx%dx%d at (%d,%d,%d) with %s\n",
                 size, size, size, cc.X, cc.Y, cc.Z, matName))
         end
@@ -190,16 +190,13 @@ RegisterKeyBind(Key[config.PaintKey], function()
     end)
 end)
 
--- Z = undo
+-- Z = undo (routes through sync so host stays authoritative)
 RegisterKeyBind(Key[config.UndoKey], function()
     ExecuteInGameThread(function()
         ensureStateLoaded()
-        local undone = painter.undo()
+        local undone = sync.sendUndo()
         if undone then
-            print("[PaintBrush] Undo successful\n")
-            if config.AutoSave then
-                state.save()
-            end
+            print("[PaintBrush] Undo sent\n")
         else
             print("[PaintBrush] Nothing to undo\n")
         end

@@ -102,6 +102,75 @@ function materials.getByPath(path)
 end
 
 -- Return the curated defaults list (array of path strings).
+-- Curated material names (hand-picked from ~1000 materials)
+local CURATED_NAMES = {
+    "MI_BaseBuilding_Glass", "MI_BaseBuilding_Glass_Grunge", "MI_Base_Floor",
+    "MI_PlanterSoil_01a", "MI_BaseBuilding_PoweredEmissive", "MI_BaseBuilding_PoweredEmissive_Grunge",
+    "MI_BaseBuilding_PoweredEmissive_Strip", "MI_SupportOverlay",
+    "MI_Blockout_Emissive_Blue_01a", "MI_Blockout_Emissive_Green_01a",
+    "MI_Blockout_Emissive_Lamp", "MI_Blockout_Emissive_White_01a", "MI_Blockout_Emissive_Yellow_01a",
+    "MI_Powercell_01_EmissiveStrip", "MI_RadialEmissive_OxygenTanks",
+    "MI_Tadpole_Emissive", "MI_Tadpole_Emissive_off",
+    "MI_AlgaePanels_01", "MI_AlgaeWeave_01a", "MI_Alterra_BaseFloor_Grunge",
+    "MI_Alterra_Emissive_NOA_Eye", "MI_Alterra_GlassRidged_01", "MI_Alterra_PosterKitty_01a",
+    "MI_Alterra_Trimsheet", "MI_Alterra_Trimsheet_Fixed", "MI_Alterra_Trimsheet_GradientActor",
+    "MI_Alterra_Trimsheet_Grunge_Lifepod", "MI_AnemoneTower_01a_Dead",
+    "MI_AxumTailings_CoralTubes_01", "MI_AxumTailings_Structures_01",
+    "MI_AxumTailings_Structures_03", "MI_AxumTailings_Structures_04",
+    "MI_Axum_Damascus_01b", "MI_Axum_GlassPattern_01b",
+    "MI_BO_WT_Petal_01", "MI_Base_Floor_Grunge",
+    "MI_BlightDamagePoint_Translucent_01a", "MI_BlightWebNoWindDissolve_01a",
+    "MI_Blockout_WakeMaker_01b_Grunge", "MI_CG_CoralDomeBroken_01a",
+    "MI_CG_Megajelly_01d", "MI_CG_RockSmooth_01a_TopSandBleached",
+    "MI_CG_RockSmooth_02b_TopSand", "MI_CG_RockSmooth_02c_TransitionYi_TopSand",
+    "MI_CG_SandPlaneBlend_01c", "MI_Cable_01_LargeTiling", "MI_CatTails_01_Body",
+    "MI_CharismaticSlime_Corners", "MI_CharismaticSlime_Growth", "MI_CharismaticSlime_Inserts",
+    "MI_CoralBranchingTree_01b", "MI_CoralCabbageLight_01a",
+    "MI_CoralLobe_04a", "MI_CoralLobe_04b", "MI_CoralPittedTubeSponge_01a",
+    "MI_CoralPlatingBlighted_01a", "MI_CoralPlatingBlighted_01b",
+    "MI_Generic_Pebbles_04a", "MI_GroundSandCave_01a", "MI_GroundSandScree_01a",
+    "MI_SkyDesertFake_01a", "MI_SkyDesertFake_01b",
+    "MI_Tailing_AxumDrum_01a", "MI_Tailing_AxumDrum_02a",
+    "MI_WT_RootIntersectionBlighted_01a", "MI_Base_Exterior_A",
+    "MI_Glass_Tadpole", "MI_Waterslug_01_Body_Glass", "MI_Waterslug_01_Body_GlassCheap",
+    "MI_Bed_Single_A", "MI_Biobed_Emissive", "MI_Fabricator_Emissive",
+    "MI_ModificationStation_Emissive", "MI_Biobed_UI", "MI_Desk_A_Screen",
+    "MI_Sofa_A_GrayDark", "MI_Sofa_A_Orange", "35mm_Prime",
+    "MI_Anemonecrab_01_Eye", "MI_Axum_OrnatePearl_Amber_Temp",
+    "MI_Axum_OrnatePearl_FulguriteBase_Temp", "MI_Base_Overhead_WhiteLights",
+    "MI_BlockoutGrid_White", "MI_BlockoutGrid_Yellow",
+    "MI_Blockout_BaseLightingStrip_02", "MI_Blockout_Blackout_01a",
+    "MI_Blockout_DarkRed_Matte_01", "MI_Blockout_GreyDark_Matte_01a",
+    "MI_Blockout_GreyLight_Matte_01a", "MI_Blockout_GreyLight_Matte_01b",
+    "MI_Blockout_GreyLight_Matte_01c", "MI_Blockout_MetalRust_01a",
+    "MI_Blockout_Orange_Matte_01b", "MI_Blockout_PlasticBlack_Matte_01a",
+    "MI_Blockout_PlasticBlack_Shiny_01a", "MI_Blockout_PlasticYellow_Shiny_01a",
+    "MI_Blockout_RockBrown_Matte_01a", "MI_Blockout_RockGrey_Matte_01a",
+    "MI_Blockout_Yellow_Matte_01b", "MI_CavesWaterSurface",
+    "MI_Char_LayerStandard_Creatures", "MI_Coralcrab_01_Eye",
+    "MI_DeepStart_WaterSurface", "MI_Electricgeordie_01a_Eye", "MI_Fins_Standard",
+    "MI_Fluttertail_01b_LOD0", "MI_Halfmoon_01_Eye", "MI_Halfmoon_01b_Eye",
+    "MI_Houndgar_01_Eye", "MI_InvisSpawner_AnemoneFruit_01",
+    "MI_Player_01_Eye", "MI_Player_02_Eye", "MI_Player_01_Eye_LOD", "MI_Player_01_Teeth",
+    "MI_ResourcePrototype_Titanium", "MI_ResourcePrototype_Troilite",
+    "MI_Resource_AtacamiteNode_01a", "MI_Resource_CelestineNode_01a",
+    "MI_Resource_CelestineNode_01a_NoDFAO", "MI_Resource_GoldNode_02a",
+    "MI_Resource_Quartz_02a", "MI_Sandspear_Adult_01_Eyes",
+    "MI_TempBlightNode_Active", "MI_TempBlightNode_Remediated",
+    "MI_Twineels_01a_Eye", "MI_Wakemaker_01b", "MI_Waxmoon_01_Eyes",
+    "MI_Copper_01a", "MI_Titanium_01a",
+}
+
+-- Build lookup set for fast checking
+local curatedSet = {}
+for _, name in ipairs(CURATED_NAMES) do
+    curatedSet[name] = true
+end
+
+function materials.isCurated(name)
+    return curatedSet[name] == true
+end
+
 function materials.getDefaults()
     return DEFAULTS
 end

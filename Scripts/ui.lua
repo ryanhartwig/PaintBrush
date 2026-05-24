@@ -186,6 +186,7 @@ local selectedMaterialPath = nil  -- must be before buildUI so renderPage can se
 -- Category filter state (persists across open/close for "remember position")
 local CATEGORIES = {
     "Favourites",
+    "Curated",
     "Base Building",
     "Base Powered",
     "Glass",
@@ -193,14 +194,13 @@ local CATEGORIES = {
     "Environment",
     "Surfaces",
     "Interior",
-    "Exterior",
     "Other",
     "ALL",
 }
 
 local categoryButtons = {}
 local materialRows = {}
-local activeCategoryName = "Base Building"  -- persists across open/close
+local activeCategoryName = "Curated"  -- persists across open/close
 local savedPage = 1                        -- persists across open/close
 
 -- Brush size state (persists, readable via ui.getBrushRadius())
@@ -266,6 +266,10 @@ end
 
 local function isFavouritesMode()
     return activeCategoryName == "Favourites"
+end
+
+local function isCuratedMode()
+    return activeCategoryName == "Curated"
 end
 
 local function updateCategoryButtonOpacity()
@@ -346,8 +350,8 @@ local function buildUI(onApply, onSelect)
         local yPos = startY + (i - 1) * stepY
         local btnSlot = canvas:AddChildToCanvas(btn)
         btnSlot:SetAnchors({
-            Minimum = { X = pX(0.02), Y = pY(yPos) },
-            Maximum = { X = pX(0.02), Y = pY(yPos) },
+            Minimum = { X = pX(0.05), Y = pY(yPos) },
+            Maximum = { X = pX(0.05), Y = pY(yPos) },
         })
         btnSlot:SetAutoSize(true)
     end
@@ -378,8 +382,8 @@ local function buildUI(onApply, onSelect)
         local yPos = toolY + (i - 1) * stepY
         local btnSlot = canvas:AddChildToCanvas(btn)
         btnSlot:SetAnchors({
-            Minimum = { X = pX(0.02), Y = pY(yPos) },
-            Maximum = { X = pX(0.02), Y = pY(yPos) },
+            Minimum = { X = pX(0.05), Y = pY(yPos) },
+            Maximum = { X = pX(0.05), Y = pY(yPos) },
         })
         btnSlot:SetAutoSize(true)
     end
@@ -399,8 +403,8 @@ local function buildUI(onApply, onSelect)
     end)
     local eraserSlot = canvas:AddChildToCanvas(eraserButton)
     eraserSlot:SetAnchors({
-        Minimum = { X = pX(0.02), Y = pY(eraserY) },
-        Maximum = { X = pX(0.02), Y = pY(eraserY) },
+        Minimum = { X = pX(0.05), Y = pY(eraserY) },
+        Maximum = { X = pX(0.05), Y = pY(eraserY) },
     })
     eraserSlot:SetAutoSize(true)
     updateEraserOpacity()
@@ -428,11 +432,14 @@ local function buildUI(onApply, onSelect)
         filteredMats = {}
         local showAll = isShowAll()
         local showFavs = isFavouritesMode()
+        local showCurated = isCuratedMode()
 
         for _, mat in ipairs(allMats) do
             if mat.category == "zzz_Skip" then goto nextMat end
             if showFavs then
                 if not favourites[mat.path] then goto nextMat end
+            elseif showCurated then
+                if not materials.isCurated(mat.name) then goto nextMat end
             elseif not showAll then
                 if mat.category ~= activeCategoryName then goto nextMat end
             end

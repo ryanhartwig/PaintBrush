@@ -338,4 +338,87 @@ function state.load()
         #rebuiltBases, slotPath))
 end
 
+-- ============================================================
+-- Multiplayer sync helpers (used by sync.lua)
+-- ============================================================
+
+-- Serialize current painted state to JSON string (no file I/O)
+function state.serializeCurrentState()
+    local paintedCells = painter.getPaintedCells()
+    local basesData = {}
+    for _, baseData in pairs(paintedCells) do
+        local base = baseData.base
+        if not base or not base:IsValid() then goto continue end
+        local guidStr = guidString(base)
+        if not guidStr then goto continue end
+        local cellsArr = {}
+        for _, c in ipairs(baseData.cells) do
+            table.insert(cellsArr, {
+                x   = c.cellCoords.X,
+                y   = c.cellCoords.Y,
+                z   = c.cellCoords.Z,
+                mat = c.materialPath,
+            })
+        end
+        if #cellsArr > 0 then
+            basesData[guidStr] = { cells = cellsArr }
+        end
+        ::continue::
+    end
+    return json.encode({ version = 1, bases = basesData })
+end
+
+-- Apply state from a JSON string (received from host via network, no file I/O)
+function state.applyFromJson(jsonStr)
+    if not jsonStr or jsonStr == "" then return end
+
+    local ok, parsed = pcall(json.decode, jsonStr)
+    if not ok or type(parsed) ~= "table" then
+        print("[PaintBrush] state.applyFromJson: failed to parse\n")
+        return
+    end
+
+    local basesData = parsed.bases
+    if type(basesData) ~= "table" then return end
+
+    local allBases = FindAllOf("UWESculpturalBaseActor")
+    if not allBases then return end
+
+    local newPaintedCells = {}
+    local rebuiltBases = {}
+
+    for _, base in ipairs(allBases) do
+        if not base:IsValid() then goto nextBase end
+        local guidStr = guidString(base)
+        if not guidStr then goto nextBase end
+        local savedBase = basesData[guidStr]
+        if not savedBase or type(savedBase.cells) ~= "table" then goto nextBase end
+
+        local keyOk, key = pcall(function() return base:GetFullName() end)
+        if not keyOk then key = tostring(base) end
+        local cells = {}
+        for _, c in ipairs(savedBase.cells) do
+            if type(c.x) == "number" and type(c.y) == "number" and type(c.z) == "number" and type(c.mat) == "string" then
+                table.insert(cells, {
+                    cellCoords   = { X = c.x, Y = c.y, Z = c.z },
+                    materialPath = c.mat,
+                })
+            end
+        end
+        if #cells > 0 then
+            newPaintedCells[key] = { base = base, cells = cells }
+            table.insert(rebuiltBases, base)
+        end
+        ::nextBase::
+    end
+
+    painter.setPaintedCells(newPaintedCells)
+    painter.clearHistory()
+    for _, base in ipairs(rebuiltBases) do
+        pcall(painter.rebuild, base)
+    end
+
+    print(string.format("[PaintBrush] state.applyFromJson: applied %d base(s)\n", #rebuiltBases))
+end
+
 return state
