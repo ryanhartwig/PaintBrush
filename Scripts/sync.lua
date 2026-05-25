@@ -200,36 +200,63 @@ end
 local MAX_MSG_SIZE = 16000  -- safe limit for ClientMessage string
 
 local function sendStateTo(senderPC)
-    -- Instead of sending full JSON (can be 300KB+), send individual paint actions
-    -- This is slower but guarantees delivery
-    local paintedCells = painter.getPaintedCells()
+    -- Read state directly from the JSON file (avoids stale UObject refs)
+    local slotPath = state.getSlotPath()
+    local f = io.open(slotPath, "r")
+    if not f then
+        print(string.format("[PaintBrush] sync: no state file at %s\n", slotPath))
+        return
+    end
+    local content = f:read("*a")
+    f:close()
+
+    if not content or content == "" then
+        print("[PaintBrush] sync: state file is empty\n")
+        return
+    end
+
+    -- Parse JSON to extract bases and cells
+    local parsed = nil
+    pcall(function() parsed = state.decodeJson(content) end)
+    if not parsed or type(parsed) ~= "table" or type(parsed.bases) ~= "table" then
+        print("[PaintBrush] sync: failed to parse state file\n")
+        return
+    end
+
+    local version = parsed.version or 1
     local totalSent = 0
 
-    for _, baseData in pairs(paintedCells) do
-        local base = baseData.base
-        if not base or not base:IsValid() then goto nextBase end
-        local guid = nil
-        pcall(function()
-            local g = base.BaseNetworkGUID
-            guid = string.format("%08X%08X%08X%08X", g.A, g.B, g.C, g.D)
-        end)
-        if not guid then goto nextBase end
+    for guid, baseEntry in pairs(parsed.bases) do
+        if type(baseEntry.cells) ~= "table" then goto nextBase end
 
-        -- Batch cells by material, then send each batch
+        -- Group cells by material
         local byMat = {}
-        for _, c in ipairs(baseData.cells) do
-            if not byMat[c.materialPath] then
-                byMat[c.materialPath] = {}
+        if version >= 2 then
+            -- v2: cells is map {"X,Y,Z" -> matPath}
+            for cellKey, matPath in pairs(baseEntry.cells) do
+                if type(cellKey) == "string" and type(matPath) == "string" then
+                    if not byMat[matPath] then byMat[matPath] = {} end
+                    local x, y, z = cellKey:match("^(-?%d+),(-?%d+),(-?%d+)$")
+                    if x then
+                        table.insert(byMat[matPath], {X=tonumber(x), Y=tonumber(y), Z=tonumber(z)})
+                    end
+                end
             end
-            table.insert(byMat[c.materialPath], c.cellCoords)
+        else
+            -- v1: cells is array [{x,y,z,mat}]
+            for _, c in ipairs(baseEntry.cells) do
+                if type(c.mat) == "string" then
+                    if not byMat[c.mat] then byMat[c.mat] = {} end
+                    table.insert(byMat[c.mat], {X=c.x, Y=c.y, Z=c.z})
+                end
+            end
         end
 
+        -- Send each material's cells in chunks of 50
         for matPath, cells in pairs(byMat) do
-            -- Send in chunks to stay under message size limit
             local chunk = {}
             for _, coords in ipairs(cells) do
                 table.insert(chunk, coords)
-                -- Estimate message size: ~20 chars per cell + overhead
                 if #chunk >= 50 then
                     local msg = MSG_RELAY_PAINT .. guid .. "|" .. encodeCells(chunk) .. "|" .. matPath
                     pcall(function()

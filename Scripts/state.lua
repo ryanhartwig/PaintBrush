@@ -188,6 +188,11 @@ local function getSlotName()
 end
 
 -- Returns the full path for the current slot's state JSON file
+-- Expose JSON decoder for sync.lua
+function state.decodeJson(s)
+    return json.decode(s)
+end
+
 function state.getSlotPath()
     local slotName = getSlotName()
     return getModDir() .. "/state/" .. slotName .. ".json"
