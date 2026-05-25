@@ -196,9 +196,9 @@ end
 -- Store state outside the mod folder so mod updates/reinstalls don't wipe user data.
 -- Location: <ue4ss>/PaintBrush/state/<slotName>.json
 local function getDataDir()
-    -- ModDir is <ue4ss>/Mods/PaintBrush/Scripts/../ = <ue4ss>/Mods/PaintBrush/
-    -- Go up two levels: Mods/PaintBrush/ → Mods/ → ue4ss/
-    return (config.ModDir or ""):gsub("[/\\]+$", ""):match("(.+[/\\])") :match("(.+[/\\])") .. "PaintBrush/"
+    -- config.ModDir = .../Mods/PaintBrush/Scripts/../
+    -- ../../ goes: Mods/PaintBrush/ → Mods/ → ue4ss/
+    return config.ModDir .. "../../PaintBrush/"
 end
 
 function state.getSlotPath()

@@ -56,7 +56,7 @@ end
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 RegisterLoadMapPostHook(function(engine, world)
     _stateLoaded = false
-    ui.invalidateCache()  -- new world = new widget tree needed
+    pcall(ui.invalidateCache)  -- new world = new widget tree needed (pcall: may fire during teardown)
     ExecuteWithDelay(3000, function()
         ExecuteInGameThread(function()
             painter.setPaintedCells({})

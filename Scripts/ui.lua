@@ -219,8 +219,7 @@ local eraserButton = nil
 local favourites = {}  -- set: { [materialPath] = true }
 
 local function getFavouritesPath()
-    -- Store outside mod folder (survives mod reinstall)
-    local dataDir = (config.ModDir or ""):gsub("[/\\]+$", ""):match("(.+[/\\])"):match("(.+[/\\])") .. "PaintBrush/"
+    local dataDir = config.ModDir .. "../../PaintBrush/"
     os.execute('mkdir "' .. dataDir:gsub("/", "\\") .. '" 2>nul')
     return dataDir .. "favourites.txt"
 end
