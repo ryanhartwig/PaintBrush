@@ -1,7 +1,7 @@
 local config = {}
 
 config.ModDir = debug.getinfo(1, "S").source:match("@(.*/)")  .. "../"
-config.VERSION = "1.0.0"
+config.VERSION = "1.0.1"
 
 -- Defaults
 config.PickerKey = "B"
@@ -29,4 +29,26 @@ local function loadConfig()
 end
 
 loadConfig()
+
+-- Build hash: content-based fingerprint for verifying code sync across machines
+local function computeBuildHash()
+    local hash = 0
+    local scriptDir = config.ModDir .. "Scripts/"
+    local files = {"main.lua", "config.lua", "painter.lua", "sync.lua",
+                   "state.lua", "detection.lua", "materials.lua", "ui.lua", "textures.lua"}
+    for _, fname in ipairs(files) do
+        local f = io.open(scriptDir .. fname, "r")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            for i = 1, #content do
+                hash = (hash * 31 + content:byte(i)) % 1000000007
+            end
+        end
+    end
+    return string.format("%07x", hash)
+end
+
+config.BUILD_HASH = computeBuildHash()
+
 return config

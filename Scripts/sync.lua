@@ -14,9 +14,6 @@ local _onSaveNeeded = nil  -- set by main.lua to debouncedSave
 function sync.setSaveCallback(cb)
     _onSaveNeeded = cb
 end
-local _deferredRebuildScheduled = false
-local _debouncedRebuildScheduled = false  -- set by main.lua after state.load() completes
-local _hostDebouncedRebuildScheduled = false
 
 function sync.setHostReady()
     hostStateReady = true
@@ -133,8 +130,7 @@ function sync.invalidateCache()
     _isSoloHost = true
     _localPCName = nil
     _guidToBase = nil
-    _deferredRebuildScheduled = false
-    _debouncedRebuildScheduled = false
+    painter.cancelScheduledRebuilds()
 end
 
 function sync.sendPaint(base, cellCoordsList, materialPath)
@@ -185,37 +181,6 @@ end
 -- Broadcasting (host → all clients)
 --------------------------------------------------------------------------------
 
-local function broadcastState()
-    -- Serialize current state using state.lua's format
-    local jsonStr = state.serializeCurrentState()
-    if not jsonStr then return end
-    local msg = MSG_STATE .. jsonStr
-
-    -- Get local PC name to skip self (host already applied locally)
-    local localPCName = nil
-    pcall(function() localPCName = UEHelpers:GetPlayerController():GetFullName() end)
-
-    local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
-    if not targets then return end
-    local sent = 0
-    for _, pc in ipairs(targets) do
-        pcall(function()
-            if pc:IsValid()
-               and not pc:HasAnyFlags(EObjectFlags.RF_ClassDefaultObject) then
-                local pcName = pc:GetFullName()
-                if pcName ~= localPCName then
-                    pc:ClientMessage(msg, FName("Event"), 10.0)
-                    sent = sent + 1
-                end
-            end
-        end)
-    end
-    -- If no one to send to, we're solo again
-    if sent == 0 and _isHostKnown then
-        _isSoloHost = true
-    end
-end
-
 -- Relay a small action message to all non-self clients (instead of full state)
 local function relayToOthers(msg)
     local localPCName = nil
@@ -235,8 +200,6 @@ local function relayToOthers(msg)
         end)
     end
 end
-
-local MAX_MSG_SIZE = 16000  -- safe limit for ClientMessage string
 
 local function sendStateTo(senderPC)
     -- Read state directly from the JSON file (avoids stale UObject refs)
@@ -326,10 +289,8 @@ end
 
 -- HOST: handle incoming paint/erase/request messages from any player
 RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgParam)
-    local tHook0 = os.clock()
     local ok, raw = pcall(function() return msgParam:get():ToString() end)
     if not ok or not raw or raw:sub(1, 3) ~= PREFIX then return end
-    local tParse = os.clock()
 
     -- Check if sender is local player (cached local PC name)
     local isLocal = false
@@ -343,42 +304,20 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             isLocal = (senderPC:GetFullName() == _localPCName)
         end
     end)
-    local tLocal = os.clock()
 
     if raw:sub(1, #MSG_PAINT) == MSG_PAINT then
         local payload = raw:sub(#MSG_PAINT + 1)
         local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
         if guid and cellsStr and matPath then
-            local tApply = os.clock()
             if not isLocal then
                 local base = getBaseByGuid(guid)
                 if base then
                     painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
                 end
                 if _onSaveNeeded then _onSaveNeeded() end
-                if not _hostDebouncedRebuildScheduled then
-                    _hostDebouncedRebuildScheduled = true
-                    ExecuteWithDelay(200, function()
-                        ExecuteInGameThread(function()
-                            _hostDebouncedRebuildScheduled = false
-                            for _, baseData in pairs(painter.getPaintedCells()) do
-                                if baseData.base and baseData.base:IsValid() then
-                                    pcall(painter.rebuild, baseData.base)
-                                end
-                            end
-                        end)
-                    end)
-                end
+                painter.scheduleRebuild()
             end
-            local tSave = os.clock()
             relayToOthers(MSG_RELAY_PAINT .. guid .. "|" .. cellsStr .. "|" .. matPath)
-            local tRelay = os.clock()
-            print(string.format(
-                "[PaintBrush] HOOK perf: isLocal=%s | parse=%.1fms localChk=%.1fms apply+save=%.1fms relay=%.1fms TOTAL=%.1fms\n",
-                tostring(isLocal),
-                (tParse - tHook0)*1000, (tLocal - tParse)*1000,
-                (tSave - tApply)*1000, (tRelay - tSave)*1000,
-                (tRelay - tHook0)*1000))
         end
 
     elseif raw:sub(1, #MSG_ERASE) == MSG_ERASE then
@@ -391,19 +330,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
                     painter.eraseBatch(base, decodeCells(cellsStr), true, true)
                 end
                 if _onSaveNeeded then _onSaveNeeded() end
-                if not _hostDebouncedRebuildScheduled then
-                    _hostDebouncedRebuildScheduled = true
-                    ExecuteWithDelay(200, function()
-                        ExecuteInGameThread(function()
-                            _hostDebouncedRebuildScheduled = false
-                            for _, baseData in pairs(painter.getPaintedCells()) do
-                                if baseData.base and baseData.base:IsValid() then
-                                    pcall(painter.rebuild, baseData.base)
-                                end
-                            end
-                        end)
-                    end)
-                end
+                painter.scheduleRebuild()
             end
             relayToOthers(MSG_RELAY_ERASE .. guid .. "|" .. cellsStr)
         end
@@ -454,37 +381,9 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr and matPath then
             local base = getBaseByGuid(guid)
             if base then
-                -- skipRebuild=true: defer rebuild to avoid rapid Empty/recreate/ForceFullBaseUpdate crashes
                 painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
-                -- Schedule a short debounced rebuild (200ms) for interactive feedback
-                -- Plus a long deferred rebuild (8s) for late-streaming materials
-                if not _debouncedRebuildScheduled then
-                    _debouncedRebuildScheduled = true
-                    ExecuteWithDelay(200, function()
-                        ExecuteInGameThread(function()
-                            _debouncedRebuildScheduled = false
-                            for _, baseData in pairs(painter.getPaintedCells()) do
-                                if baseData.base and baseData.base:IsValid() then
-                                    pcall(painter.rebuild, baseData.base)
-                                end
-                            end
-                        end)
-                    end)
-                end
-                if not _deferredRebuildScheduled then
-                    _deferredRebuildScheduled = true
-                    ExecuteWithDelay(8000, function()
-                        ExecuteInGameThread(function()
-                            _deferredRebuildScheduled = false
-                            for _, baseData in pairs(painter.getPaintedCells()) do
-                                if baseData.base and baseData.base:IsValid() then
-                                    pcall(painter.rebuild, baseData.base)
-                                end
-                            end
-                            print("[PaintBrush] sync: deferred rebuild for late-streaming materials\n")
-                        end)
-                    end)
-                end
+                painter.scheduleRebuild()
+                painter.scheduleDeferredRebuild()
             end
         end
         return
@@ -498,20 +397,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
             local base = getBaseByGuid(guid)
             if base then
                 painter.eraseBatch(base, decodeCells(cellsStr), true, true)
-                if not _debouncedRebuildScheduled then
-                    _debouncedRebuildScheduled = true
-                    ExecuteWithDelay(200, function()
-                        ExecuteInGameThread(function()
-                            _debouncedRebuildScheduled = false
-                            for _, baseData in pairs(painter.getPaintedCells()) do
-                                if baseData.base and baseData.base:IsValid() then
-                                    pcall(painter.rebuild, baseData.base)
-                                end
-                            end
-                        end)
-                    end)
-                end
-                print("[PaintBrush] sync: relayed erase\n")
+                painter.scheduleRebuild()
             end
         end
         return

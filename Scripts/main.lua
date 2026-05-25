@@ -266,28 +266,10 @@ RegisterKeyBind(Key[config.PaintKey], function()
     end)
 end)
 
--- Debounced undo rebuild: accumulate rapid undos, rebuild once
-local _undoRebuildTimer = nil
-local _undoRebuildBase = nil
-
-local function scheduleUndoRebuild(base)
-    _undoRebuildBase = base
-    if _undoRebuildTimer then return end  -- already scheduled
-    _undoRebuildTimer = true
-    ExecuteWithDelay(200, function()
-        ExecuteInGameThread(function()
-            _undoRebuildTimer = nil
-            if _undoRebuildBase and _undoRebuildBase:IsValid() then
-                painter.rebuild(_undoRebuildBase)
-            end
-            _undoRebuildBase = nil
-        end)
-    end)
-end
-
 -- Z = undo (local apply + relay reverse operations to other players)
 RegisterKeyBind(Key[config.UndoKey], function()
     ExecuteInGameThread(function()
+        if not _worldReady then return end
         ensureStateLoaded()
         local entry = painter.peekUndo()
         if not entry then
@@ -295,7 +277,7 @@ RegisterKeyBind(Key[config.UndoKey], function()
             return
         end
 
-        -- Extract reverse operations BEFORE undoing
+        -- Extract reverse operations BEFORE undoing (for sync)
         local base = entry.base
         local eraseCells = {}
         local paintGroups = {}
@@ -311,35 +293,9 @@ RegisterKeyBind(Key[config.UndoKey], function()
             end
         end
 
-        -- Apply undo locally (skipRebuild — debounce handles it)
-        -- painter.undo calls rebuild internally, but we need skipRebuild
-        -- So pop + apply manually:
-        painter.popUndo()
-        local key = nil
-        pcall(function() key = base:GetFullName() end)
-        if key then
-            local baseData = painter.getPaintedCells()[key]
-            if baseData then
-                for _, prev in ipairs(entry.batch or {}) do
-                    if prev.previousMaterial then
-                        baseData.cells[prev.cellKey] = prev.previousMaterial
-                    else
-                        baseData.cells[prev.cellKey] = nil
-                    end
-                end
-                -- Clean up empty
-                local hasAny = false
-                for _ in pairs(baseData.cells) do hasAny = true; break end
-                if not hasAny then
-                    painter.getPaintedCells()[key] = nil
-                end
-            end
-        end
-
-        -- Debounced rebuild (200ms) — rapid undos get ONE rebuild
-        if base and base:IsValid() then
-            scheduleUndoRebuild(base)
-        end
+        -- Apply undo (hashmap only, visual update via scheduleRebuild)
+        painter.undo(true)
+        painter.scheduleRebuild()
 
         -- Send reverse operations to other players
         if base and base:IsValid() then
@@ -387,4 +343,4 @@ pcall(function()
     end
 end)
 
-print(string.format("[PaintBrush] v%s loaded. B=picker, E=paint, Z=undo\n", config.VERSION))
+print(string.format("[PaintBrush] v%s [%s] loaded. B=picker, E=paint, Z=undo\n", config.VERSION, config.BUILD_HASH))

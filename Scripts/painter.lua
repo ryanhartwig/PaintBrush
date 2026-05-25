@@ -6,6 +6,14 @@ local paintedCells = {}
 -- undoStack: array of { baseKey, base, batch = { {cellKey, previousMaterial}, ... } }
 local undoStack = {}
 
+-- Incremental override tracking: maps material paths to their override array indices
+-- Populated by rebuild(), updated by incrementalApply/Erase, cleared on setPaintedCells()
+local _matToIndex = {}   -- { [baseKeyString] = { [matPath] = arrayIndex } }
+
+-- Centralized rebuild scheduling (replaces scattered debounce in main/sync)
+local _rebuildScheduled = false
+local _rebuildDeferredScheduled = false
+
 local function baseKey(base)
     local ok, name = pcall(function() return base:GetFullName() end)
     return ok and name or tostring(base)
@@ -21,19 +29,122 @@ local function parseCellKey(key)
 end
 painter.parseCellKey = parseCellKey
 
--- Rebuild MaterialOverrides on a base from current paintedCells state
--- Guard: prevent multiple rebuilds for the same base within 150ms (crash on slow PCs)
-local _lastRebuildTime = {}
+--------------------------------------------------------------------------------
+-- Incremental operations (direct TArray/TSet mutation)
+--------------------------------------------------------------------------------
+
+-- Incremental paint: directly mutate the override array instead of full rebuild.
+-- Falls back to full rebuild on any error.
+local function incrementalApply(base, cellCoordsList, matPath, oldMaterials)
+    local key = baseKey(base)
+    if not _matToIndex[key] then _matToIndex[key] = {} end
+
+    local arr
+    local ok = pcall(function() arr = base.MaterialOverrides.Overrides end)
+    if not ok or not arr then
+        painter.rebuild(base)
+        return
+    end
+
+    -- Remove cells from their old material entries (handles repaint case)
+    for _, c in ipairs(cellCoordsList) do
+        local ck = cellKey(c)
+        local oldMat = oldMaterials[ck]
+        if oldMat and oldMat ~= matPath then
+            local oldIdx = _matToIndex[key][oldMat]
+            if oldIdx then
+                pcall(function() arr[oldIdx].Cells:Remove({X=c.X, Y=c.Y, Z=c.Z}) end)
+            end
+        end
+    end
+
+    -- Add cells to the target material entry
+    local idx = _matToIndex[key][matPath]
+    if idx then
+        local ok2 = pcall(function()
+            local entry = arr[idx]
+            for _, c in ipairs(cellCoordsList) do
+                entry.Cells:Add({X=c.X, Y=c.Y, Z=c.Z})
+            end
+        end)
+        if not ok2 then
+            painter.rebuild(base)
+            return
+        end
+    else
+        -- New material: grow the array
+        local matObj = StaticFindObject(matPath)
+        if not matObj or not matObj:IsValid() then return end
+
+        local newIdx = #arr + 1
+        local ok2 = pcall(function()
+            arr[newIdx] = {}
+            local entry = arr[newIdx]
+            entry.Hide = false
+            entry.Material = matObj
+            entry.Cells = {{X=cellCoordsList[1].X, Y=cellCoordsList[1].Y, Z=cellCoordsList[1].Z}}
+            for ci = 2, #cellCoordsList do
+                entry.Cells:Add({X=cellCoordsList[ci].X, Y=cellCoordsList[ci].Y, Z=cellCoordsList[ci].Z})
+            end
+        end)
+        if not ok2 then
+            painter.rebuild(base)
+            return
+        end
+        _matToIndex[key][matPath] = newIdx
+    end
+
+    pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
+end
+
+-- Incremental erase: remove cells from their material's override entry.
+-- Falls back to full rebuild on any error.
+local function incrementalErase(base, cellCoordsList, oldMaterials)
+    local key = baseKey(base)
+    if not _matToIndex[key] then
+        painter.rebuild(base)
+        return
+    end
+
+    local arr
+    local ok = pcall(function() arr = base.MaterialOverrides.Overrides end)
+    if not ok or not arr then
+        painter.rebuild(base)
+        return
+    end
+
+    local ok2 = pcall(function()
+        for _, c in ipairs(cellCoordsList) do
+            local ck = cellKey(c)
+            local oldMat = oldMaterials[ck]
+            if oldMat then
+                local oldIdx = _matToIndex[key][oldMat]
+                if oldIdx then
+                    arr[oldIdx].Cells:Remove({X=c.X, Y=c.Y, Z=c.Z})
+                end
+            end
+        end
+    end)
+    if not ok2 then
+        painter.rebuild(base)
+        return
+    end
+
+    pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
+end
+
+--------------------------------------------------------------------------------
+-- Full rebuild (from hashmap — used for state load, compaction, fallback)
+--------------------------------------------------------------------------------
 
 function painter.rebuild(base)
     local t0 = os.clock()
     local key = baseKey(base)
-    if _lastRebuildTime[key] and (t0 - _lastRebuildTime[key]) < 0.15 then
-        return
-    end
-    _lastRebuildTime[key] = t0
+    _matToIndex[key] = {}  -- always reset on full rebuild
 
-    local arr = base.MaterialOverrides.Overrides
+    local arr
+    local okAccess = pcall(function() arr = base.MaterialOverrides.Overrides end)
+    if not okAccess or not arr then return end
     local tAccess = os.clock()
 
     if #arr > 0 then
@@ -41,7 +152,6 @@ function painter.rebuild(base)
     end
     local tEmpty = os.clock()
 
-    local key = baseKey(base)
     local baseData = paintedCells[key]
 
     local cellCount = 0
@@ -50,7 +160,8 @@ function painter.rebuild(base)
     end
 
     if not baseData or cellCount == 0 then
-        print(string.format("[PaintBrush] perf: 0 cells, abort (%.1fms)\n", (os.clock() - t0) * 1000))
+        pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
+        print(string.format("[PaintBrush] rebuild: 0 cells, cleared (%.1fms)\n", (os.clock() - t0) * 1000))
         return
     end
 
@@ -68,18 +179,20 @@ function painter.rebuild(base)
     end
     local tGroup = os.clock()
 
-    -- Create override entries
+    -- Create override entries (skip missing materials, no index gaps)
     local totalCellsWritten = 0
     local matsMissing = 0
-    for idx, matPath in ipairs(order) do
+    local writeIdx = 0
+    for _, matPath in ipairs(order) do
         local matObj = StaticFindObject(matPath)
         if not matObj or not matObj:IsValid() then
             matsMissing = matsMissing + 1
         else
+            writeIdx = writeIdx + 1
             local cells = groups[matPath]
             pcall(function()
-                arr[idx] = {}
-                local entry = arr[idx]
+                arr[writeIdx] = {}
+                local entry = arr[writeIdx]
                 entry.Hide = false
                 entry.Material = matObj
                 entry.Cells = {{X = cells[1].X, Y = cells[1].Y, Z = cells[1].Z}}
@@ -87,6 +200,7 @@ function painter.rebuild(base)
                     entry.Cells:Add({X = cells[ci].X, Y = cells[ci].Y, Z = cells[ci].Z})
                 end
             end)
+            _matToIndex[key][matPath] = writeIdx
             totalCellsWritten = totalCellsWritten + #cells
         end
     end
@@ -96,7 +210,7 @@ function painter.rebuild(base)
     local tUpdate = os.clock()
 
     print(string.format(
-        "[PaintBrush] perf: %d cells, %d mats (%d missing) | "
+        "[PaintBrush] rebuild: %d cells, %d mats (%d missing) | "
         .. "access=%.1fms empty=%.1fms group=%.1fms write=%.1fms update=%.1fms TOTAL=%.1fms\n",
         cellCount, #order, matsMissing,
         (tAccess - t0) * 1000,
@@ -107,12 +221,10 @@ function painter.rebuild(base)
         (tUpdate - t0) * 1000))
 end
 
-function painter.apply(base, cellCoords, materialPath)
-    painter.applyBatch(base, {cellCoords}, materialPath)
-end
+--------------------------------------------------------------------------------
+-- Public API: applyBatch / eraseBatch
+--------------------------------------------------------------------------------
 
--- skipUndo: true when applying remote actions
--- skipRebuild: true when batching multiple operations (caller will rebuild once at end)
 function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo, skipRebuild)
     local tBatch0 = os.clock()
     local key = baseKey(base)
@@ -122,6 +234,13 @@ function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo, skipRe
     end
     local baseData = paintedCells[key]
 
+    -- Capture old materials BEFORE hashmap update (needed for undo + incremental)
+    local oldMaterials = {}
+    for _, coords in ipairs(cellCoordsList) do
+        local ck = cellKey(coords)
+        oldMaterials[ck] = baseData.cells[ck]
+    end
+
     -- Record undo only for LOCAL actions
     if not skipUndo then
         local prevStates = {}
@@ -129,7 +248,7 @@ function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo, skipRe
             local ck = cellKey(coords)
             table.insert(prevStates, {
                 cellKey          = ck,
-                previousMaterial = baseData.cells[ck],
+                previousMaterial = oldMaterials[ck],
             })
         end
         table.insert(undoStack, {
@@ -142,21 +261,19 @@ function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo, skipRe
         end
     end
 
-    -- Upsert all cells (O(1) per cell now!)
-    local tUpsert = os.clock()
+    -- Update hashmap (source of truth for persistence)
     for _, coords in ipairs(cellCoordsList) do
         baseData.cells[cellKey(coords)] = materialPath
     end
-    local tUpsertDone = os.clock()
 
     if not skipRebuild then
-        painter.rebuild(base)
+        incrementalApply(base, cellCoordsList, materialPath, oldMaterials)
     end
-    print(string.format("[PaintBrush] applyBatch perf: %d cells | undo=%.1fms upsert=%.1fms TOTAL=%.1fms (rebuild above)\n",
+
+    print(string.format("[PaintBrush] applyBatch: %d cells | TOTAL=%.1fms%s\n",
         #cellCoordsList,
-        (tUpsert - tBatch0) * 1000,
-        (tUpsertDone - tUpsert) * 1000,
-        (os.clock() - tBatch0) * 1000))
+        (os.clock() - tBatch0) * 1000,
+        skipRebuild and " (deferred)" or " (incremental)"))
 end
 
 function painter.eraseBatch(base, cellCoordsList, skipUndo, skipRebuild)
@@ -165,21 +282,27 @@ function painter.eraseBatch(base, cellCoordsList, skipUndo, skipRebuild)
     if not paintedCells[key] then return end
     local baseData = paintedCells[key]
 
-    local prevStates = {}
+    -- Capture old materials BEFORE clearing (needed for undo + incremental)
+    local oldMaterials = {}
     local anyPainted = false
     for _, coords in ipairs(cellCoordsList) do
         local ck = cellKey(coords)
         local prevMat = baseData.cells[ck]
-        table.insert(prevStates, {
-            cellKey          = ck,
-            previousMaterial = prevMat,
-        })
+        oldMaterials[ck] = prevMat
         if prevMat then anyPainted = true end
     end
 
     if not anyPainted then return end
 
     if not skipUndo then
+        local prevStates = {}
+        for _, coords in ipairs(cellCoordsList) do
+            local ck = cellKey(coords)
+            table.insert(prevStates, {
+                cellKey          = ck,
+                previousMaterial = oldMaterials[ck],
+            })
+        end
         table.insert(undoStack, {
             baseKey = key,
             base    = base,
@@ -190,6 +313,7 @@ function painter.eraseBatch(base, cellCoordsList, skipUndo, skipRebuild)
         end
     end
 
+    -- Clear from hashmap
     for _, coords in ipairs(cellCoordsList) do
         baseData.cells[cellKey(coords)] = nil
     end
@@ -199,12 +323,17 @@ function painter.eraseBatch(base, cellCoordsList, skipUndo, skipRebuild)
     for _ in pairs(baseData.cells) do hasAny = true; break end
     if not hasAny then
         paintedCells[key] = nil
+        _matToIndex[key] = nil
     end
 
     if not skipRebuild then
-        painter.rebuild(base)
+        incrementalErase(base, cellCoordsList, oldMaterials)
     end
 end
+
+--------------------------------------------------------------------------------
+-- Undo
+--------------------------------------------------------------------------------
 
 function painter.popUndo()
     if #undoStack == 0 then return nil end
@@ -216,7 +345,7 @@ function painter.peekUndo()
     return undoStack[#undoStack]
 end
 
-function painter.undo()
+function painter.undo(skipRebuild)
     if #undoStack == 0 then
         return false
     end
@@ -243,13 +372,63 @@ function painter.undo()
     for _ in pairs(baseData.cells) do hasAny = true; break end
     if not hasAny then
         paintedCells[key] = nil
+        _matToIndex[key] = nil
     end
 
-    if base:IsValid() then
+    if not skipRebuild and base:IsValid() then
         painter.rebuild(base)
     end
     return true
 end
+
+--------------------------------------------------------------------------------
+-- Rebuild scheduling
+--------------------------------------------------------------------------------
+
+-- Debounced rebuild: coalesces rapid calls into one rebuild 200ms later.
+-- All remote paint/erase/undo paths should call this instead of inline debounce.
+function painter.scheduleRebuild()
+    if _rebuildScheduled then return end
+    _rebuildScheduled = true
+    ExecuteWithDelay(200, function()
+        ExecuteInGameThread(function()
+            _rebuildScheduled = false
+            for _, baseData in pairs(paintedCells) do
+                if baseData.base and baseData.base:IsValid() then
+                    pcall(painter.rebuild, baseData.base)
+                end
+            end
+        end)
+    end)
+end
+
+-- Deferred rebuild: fires 8s later for late-streaming materials.
+-- Called once on state load / join sync.
+function painter.scheduleDeferredRebuild()
+    if _rebuildDeferredScheduled then return end
+    _rebuildDeferredScheduled = true
+    ExecuteWithDelay(8000, function()
+        ExecuteInGameThread(function()
+            _rebuildDeferredScheduled = false
+            for _, baseData in pairs(paintedCells) do
+                if baseData.base and baseData.base:IsValid() then
+                    pcall(painter.rebuild, baseData.base)
+                end
+            end
+            print("[PaintBrush] deferred rebuild for late-streaming materials\n")
+        end)
+    end)
+end
+
+-- Cancel all pending rebuilds (called on map load before state reset)
+function painter.cancelScheduledRebuilds()
+    _rebuildScheduled = false
+    _rebuildDeferredScheduled = false
+end
+
+--------------------------------------------------------------------------------
+-- State accessors
+--------------------------------------------------------------------------------
 
 function painter.getPaintedCells()
     return paintedCells
@@ -257,7 +436,9 @@ end
 
 function painter.setPaintedCells(data)
     paintedCells = data or {}
-    _lastRebuildTime = {}
+    _matToIndex = {}
+    _rebuildScheduled = false
+    _rebuildDeferredScheduled = false
 end
 
 function painter.clearHistory()
