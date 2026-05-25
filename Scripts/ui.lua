@@ -728,10 +728,8 @@ end
 
 -- Invalidate cached UI (call on map load / world change)
 function ui.invalidateCache()
-    if rootWidget then
-        pcall(function() rootWidget:RemoveFromViewport() end)
-        pcall(function() rootWidget:SetVisibility(1) end)
-    end
+    -- Just nil out Lua references. Don't touch UObjects — they may already be destroyed
+    -- during world teardown. UE will GC the widget tree on its own.
     rootWidget = nil
     buttonActions = {}
     categoryButtons = {}
@@ -740,6 +738,7 @@ function ui.invalidateCache()
     rebuildMaterialList = nil
     rebuildFilteredList = nil
     renderPage = nil
+    isOpen = false
 end
 
 function ui.getBrushRadius()
