@@ -57,6 +57,10 @@ local function ensureStateLoaded()
     _stateLoaded = true
 end
 
+-- Debounce state (must be before RegisterLoadMapPostHook)
+local _saveTimer = nil
+local _saveGeneration = 0
+
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 local _lastLoadedSlot = nil
 
@@ -134,9 +138,6 @@ local function getBrushRadius()
 end
 
 -- Debounced save: batches rapid paints, writes once after 2 seconds of inactivity
-local _saveTimer = nil
-local _saveGeneration = 0  -- incremented on map load to invalidate pending timers
-
 local function debouncedSave()
     if not config.AutoSave or not isHost() then return end
     if _saveTimer then return end
