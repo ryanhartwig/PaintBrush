@@ -70,8 +70,10 @@ end
 -- Sending (any player → host)
 --------------------------------------------------------------------------------
 
--- Event-driven solo host detection (no polling)
-local _isSoloHost = true  -- assume solo until another player appears
+-- Solo host detection: safe default is NOT solo (send RPCs).
+-- relayToOthers() self-corrects by setting solo=true when it sends to nobody.
+-- NotifyOnNewObject sets solo=false when a player joins.
+local _isSoloHost = false
 local _isHostKnown = false
 
 local function refreshSoloHost()
@@ -81,8 +83,8 @@ local function refreshSoloHost()
         _isHostKnown = true
         return
     end
-    local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
-    _isSoloHost = (not targets or #targets <= 1)
+    -- Host: don't scan PCs (unreliable during map transitions).
+    -- Let relayToOthers detect solo by counting recipients.
     _isHostKnown = true
 end
 
@@ -127,7 +129,8 @@ end
 
 function sync.invalidateCache()
     _isHostKnown = false
-    _isSoloHost = true
+    -- Don't reset _isSoloHost — safe default is false (send RPCs).
+    -- relayToOthers will self-correct to true if nobody is connected.
     _localPCName = nil
     _guidToBase = nil
     painter.cancelScheduledRebuilds()
@@ -182,12 +185,14 @@ end
 --------------------------------------------------------------------------------
 
 -- Relay a small action message to all non-self clients (instead of full state)
+-- Self-corrects _isSoloHost: if we send to nobody, we're solo.
 local function relayToOthers(msg)
     local localPCName = nil
     pcall(function() localPCName = UEHelpers:GetPlayerController():GetFullName() end)
 
     local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
     if not targets then return end
+    local sent = 0
     for _, pc in ipairs(targets) do
         pcall(function()
             if pc:IsValid()
@@ -195,9 +200,15 @@ local function relayToOthers(msg)
                 local pcName = pc:GetFullName()
                 if pcName ~= localPCName then
                     pc:ClientMessage(msg, FName("Event"), 10.0)
+                    sent = sent + 1
                 end
             end
         end)
+    end
+    -- Self-correct: if nobody received the relay, we're actually solo
+    if sent == 0 and _isHostKnown then
+        _isSoloHost = true
+        print("[PaintBrush] sync: relay sent to 0 players, solo=true\n")
     end
 end
 
