@@ -6,6 +6,7 @@ local materials = require("materials")
 local textures  = require("textures")
 local ui        = require("ui")
 local sync      = require("sync")
+local UEHelpers = require("UEHelpers")
 
 local _stateLoaded = false
 
@@ -82,6 +83,12 @@ RegisterLoadMapPostHook(function(engine, world)
         ExecuteInGameThread(function()
             -- Bail if a newer map load happened or game is shutting down
             if gen ~= _mapLoadGeneration then return end
+            local engineAlive = false
+            pcall(function()
+                local pc = UEHelpers:GetPlayerController()
+                if pc and pc:IsValid() then engineAlive = true end
+            end)
+            if not engineAlive then return end
 
             -- Check if this is actually a new world or just a client joining our session
             local currentSlot = nil
@@ -115,6 +122,12 @@ RegisterLoadMapPostHook(function(engine, world)
             -- Request state from host. Retry at 8s and 16s only if no state received yet.
             local function requestIfEmpty()
                 if gen ~= _mapLoadGeneration then return end
+                local alive = false
+                pcall(function()
+                    local pc = UEHelpers:GetPlayerController()
+                    if pc and pc:IsValid() then alive = true end
+                end)
+                if not alive then return end
                 local cells = painter.getPaintedCells()
                 local hasAny = false
                 for _ in pairs(cells) do hasAny = true; break end

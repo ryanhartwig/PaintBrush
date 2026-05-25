@@ -384,15 +384,17 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         return
     end
 
-    -- Relayed paint action (incremental, small message)
+    -- Relayed paint action (from host, or join-sync chunks)
+    -- Uses skipRebuild + scheduleRebuild to handle bulk join-sync gracefully
+    -- (join-sync sends ~90 chunks of 50 cells — can't do 90 ForceFullBaseUpdates)
     if raw:sub(1, #MSG_RELAY_PAINT) == MSG_RELAY_PAINT then
         local payload = raw:sub(#MSG_RELAY_PAINT + 1)
         local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
         if guid and cellsStr and matPath then
             local base = getBaseByGuid(guid)
             if base then
-                -- Use incremental path directly — no Empty(), no crash
-                painter.applyBatch(base, decodeCells(cellsStr), matPath, true, false)
+                painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
+                painter.scheduleRebuild()
                 painter.scheduleDeferredRebuild()
             end
         end
@@ -406,7 +408,8 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr then
             local base = getBaseByGuid(guid)
             if base then
-                painter.eraseBatch(base, decodeCells(cellsStr), true, false)
+                painter.eraseBatch(base, decodeCells(cellsStr), true, true)
+                painter.scheduleRebuild()
             end
         end
         return
