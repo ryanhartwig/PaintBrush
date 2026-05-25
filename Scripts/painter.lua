@@ -49,11 +49,13 @@ function painter.rebuild(base)
     local groups = {}
     local order = {}
     for ck, matPath in pairs(baseData.cells) do
-        if not groups[matPath] then
-            groups[matPath] = {}
-            table.insert(order, matPath)
+        if type(ck) == "string" and type(matPath) == "string" then
+            if not groups[matPath] then
+                groups[matPath] = {}
+                table.insert(order, matPath)
+            end
+            table.insert(groups[matPath], parseCellKey(ck))
         end
-        table.insert(groups[matPath], parseCellKey(ck))
     end
     local tGroup = os.clock()
 
