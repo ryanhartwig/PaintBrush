@@ -21,31 +21,9 @@ local function parseCellKey(key)
 end
 painter.parseCellKey = parseCellKey
 
--- Throttle: prevent rapid rebuilds (min 100ms between rebuilds)
-local _lastRebuildTime = 0
-local _rebuildPending = false
-
 -- Rebuild MaterialOverrides on a base from current paintedCells state
 function painter.rebuild(base)
-    local now = os.clock()
-    if (now - _lastRebuildTime) < 0.1 then
-        -- Too soon — schedule a deferred rebuild instead
-        if not _rebuildPending then
-            _rebuildPending = true
-            ExecuteWithDelay(150, function()
-                ExecuteInGameThread(function()
-                    _rebuildPending = false
-                    if base:IsValid() then
-                        painter.rebuild(base)
-                    end
-                end)
-            end)
-        end
-        return
-    end
-    _lastRebuildTime = now
-
-    local t0 = now
+    local t0 = os.clock()
 
     local arr = base.MaterialOverrides.Overrides
     local tAccess = os.clock()
