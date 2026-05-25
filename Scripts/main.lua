@@ -97,18 +97,56 @@ RegisterLoadMapPostHook(function(engine, world)
                 end
             end)
 
+            -- Refresh stale base UObject references and rebuild visuals.
+            -- After map transition, base actors are recreated (new UObjects, same GetFullName).
+            local function refreshBasesAndRebuild()
+                ExecuteWithDelay(3000, function()
+                    ExecuteInGameThread(function()
+                        if gen ~= _mapLoadGeneration then return end
+                        local bases = FindAllOf("UWESculpturalBaseActor")
+                        if not bases then return end
+                        local nameToBase = {}
+                        for _, base in ipairs(bases) do
+                            pcall(function()
+                                if base:IsValid() then
+                                    nameToBase[base:GetFullName()] = base
+                                end
+                            end)
+                        end
+                        local paintedCells = painter.getPaintedCells()
+                        local refreshed = 0
+                        for key, baseData in pairs(paintedCells) do
+                            if nameToBase[key] then
+                                baseData.base = nameToBase[key]
+                                refreshed = refreshed + 1
+                            end
+                        end
+                        if refreshed > 0 then
+                            for _, baseData in pairs(paintedCells) do
+                                if baseData.base and baseData.base:IsValid() then
+                                    pcall(painter.rebuild, baseData.base)
+                                end
+                            end
+                            print(string.format("[PaintBrush] Refreshed %d base ref(s) and rebuilt\n", refreshed))
+                        end
+                    end)
+                end)
+            end
+
             -- If state is already loaded, don't reset unless we're certain it's a different world
             if _stateLoaded then
                 -- Same slot = same world (client join/rejoin)
                 if currentSlot == _lastLoadedSlot and currentSlot ~= nil then
                     print("[PaintBrush] Map load hook (same world, skipping reset)\n")
                     _worldReady = true
+                    refreshBasesAndRebuild()
                     return
                 end
                 -- Slot temporarily nil (save game not yet available) = transient, don't wipe
                 if not currentSlot then
                     print("[PaintBrush] Map load hook (slot nil, keeping state)\n")
                     _worldReady = true
+                    refreshBasesAndRebuild()
                     if not isHost() then sync.requestState() end
                     return
                 end
