@@ -77,17 +77,20 @@ end
 -- Sending (any player → host)
 --------------------------------------------------------------------------------
 
--- Check if other players are connected (skip network in singleplayer)
-local function hasOtherPlayers()
+-- Check if we're the host with no other players (true singleplayer — safe to skip network)
+local function isSoloHost()
+    -- Clients always return false (they MUST send RPCs to the host)
+    local save = FindFirstOf("UWESaveGame")
+    if not save or not save:IsValid() then return false end  -- client, not host
     local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
-    if not targets then return false end
-    return #targets > 1  -- more than just us
+    if not targets then return true end
+    return #targets <= 1
 end
 
 function sync.sendPaint(base, cellCoordsList, materialPath)
     local tSend0 = os.clock()
-    if not hasOtherPlayers() then
-        print(string.format("[PaintBrush] sendPaint: no other players, skipped (%.1fms)\n", (os.clock()-tSend0)*1000))
+    if isSoloHost() then
+        print(string.format("[PaintBrush] sendPaint: solo host, skipped (%.1fms)\n", (os.clock()-tSend0)*1000))
         return
     end
     local tCheck = os.clock()
@@ -107,7 +110,7 @@ function sync.sendPaint(base, cellCoordsList, materialPath)
 end
 
 function sync.sendErase(base, cellCoordsList)
-    if not hasOtherPlayers() then return end
+    if isSoloHost() then return end
     local guid = guidString(base)
     if not guid then return end
     local msg = MSG_ERASE .. guid .. "|" .. encodeCells(cellCoordsList)
