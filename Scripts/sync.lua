@@ -8,7 +8,8 @@ local state     = require("state")
 local config    = require("config")
 
 local sync = {}
-local hostStateReady = false  -- set by main.lua after state.load() completes
+local hostStateReady = false
+local _deferredRebuildScheduled = false  -- set by main.lua after state.load() completes
 
 function sync.setHostReady()
     hostStateReady = true
@@ -376,7 +377,22 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
             local base = findBaseByGuid(guid)
             if base then
                 painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
-                print(string.format("[PaintBrush] sync: relayed paint %s\n", matPath:sub(-30)))
+                -- Schedule a deferred rebuild to catch late-streaming materials
+                if not _deferredRebuildScheduled then
+                    _deferredRebuildScheduled = true
+                    ExecuteWithDelay(8000, function()
+                        ExecuteInGameThread(function()
+                            _deferredRebuildScheduled = false
+                            -- Rebuild all bases that have painted cells
+                            for _, baseData in pairs(painter.getPaintedCells()) do
+                                if baseData.base and baseData.base:IsValid() then
+                                    pcall(painter.rebuild, baseData.base)
+                                end
+                            end
+                            print("[PaintBrush] sync: deferred rebuild for late-streaming materials\n")
+                        end)
+                    end)
+                end
             end
         end
         return
