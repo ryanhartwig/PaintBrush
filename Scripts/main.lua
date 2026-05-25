@@ -58,13 +58,32 @@ local function ensureStateLoaded()
 end
 
 -- Auto-load paint state when a map loads (handles initial load + save reload)
+local _lastLoadedSlot = nil
+
 RegisterLoadMapPostHook(function(engine, world)
-    _stateLoaded = false
     _isHostCached = nil
     sync.invalidateCache()
-    pcall(ui.invalidateCache)  -- new world = new widget tree needed (pcall: may fire during teardown)
+    pcall(ui.invalidateCache)
+
     ExecuteWithDelay(3000, function()
         ExecuteInGameThread(function()
+            -- Check if this is actually a new world or just a client joining our session
+            local currentSlot = nil
+            pcall(function()
+                local save = FindFirstOf("UWESaveGame")
+                if save and save:IsValid() then
+                    currentSlot = save:GetSlotName():ToString()
+                end
+            end)
+
+            if _stateLoaded and currentSlot == _lastLoadedSlot and currentSlot ~= nil then
+                -- Same world, just a client join/rejoin — don't reset host state
+                print("[PaintBrush] Map load hook (same world, skipping reset)\n")
+                return
+            end
+
+            _lastLoadedSlot = currentSlot
+            _stateLoaded = false
             painter.setPaintedCells({})
             painter.clearHistory()
             reloadMaterials()
