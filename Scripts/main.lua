@@ -147,12 +147,14 @@ local function debouncedSave()
     ExecuteWithDelay(2000, function()
         ExecuteInGameThread(function()
             _saveTimer = nil
-            -- Skip if a map load happened since this timer was scheduled
             if gen ~= _saveGeneration then return end
             state.save()
         end)
     end)
 end
+
+-- Share debounced save with sync.lua (remote paints use same debounce)
+sync.setSaveCallback(debouncedSave)
 
 -- B = open material picker UI
 local pendingTarget = nil  -- stores detection info while UI is open

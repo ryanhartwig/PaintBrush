@@ -9,6 +9,11 @@ local config    = require("config")
 
 local sync = {}
 local hostStateReady = false
+local _onSaveNeeded = nil  -- set by main.lua to debouncedSave
+
+function sync.setSaveCallback(cb)
+    _onSaveNeeded = cb
+end
 local _deferredRebuildScheduled = false  -- set by main.lua after state.load() completes
 
 function sync.setHostReady()
@@ -347,7 +352,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
                 if base then
                     painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
                 end
-                state.save()
+                if _onSaveNeeded then _onSaveNeeded() end
             end
             local tSave = os.clock()
             relayToOthers(MSG_RELAY_PAINT .. guid .. "|" .. cellsStr .. "|" .. matPath)
@@ -369,7 +374,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
                 if base then
                     painter.eraseBatch(base, decodeCells(cellsStr), true)
                 end
-                state.save()
+                if _onSaveNeeded then _onSaveNeeded() end
             end
             relayToOthers(MSG_RELAY_ERASE .. guid .. "|" .. cellsStr)
         end
