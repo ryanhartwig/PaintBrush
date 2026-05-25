@@ -726,6 +726,7 @@ function ui.close()
     end
 
     isOpen = false
+    _hookDisabled = true  -- disable hook when picker is closed (prevents exit crash)
 end
 
 function ui.isOpen()
