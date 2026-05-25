@@ -282,6 +282,8 @@ end
 
 -- Forward declaration — populated in buildUI
 local rebuildMaterialList = nil
+local rebuildFilteredList = nil
+local renderPage = nil
 
 local function onCategoryClick(catName)
     activeCategoryName = catName
@@ -428,7 +430,7 @@ local function buildUI(onApply, onSelect)
     local filteredMats = {}  -- current filtered list (rebuilt on category change)
 
     -- Filter materials for the current category
-    local function rebuildFilteredList()
+    rebuildFilteredList = function()
         filteredMats = {}
         local showAll = isShowAll()
         local showFavs = isFavouritesMode()
@@ -458,149 +460,185 @@ local function buildUI(onApply, onSelect)
         end
     end
 
-    -- Render current page of materials
-    local function renderPage()
-        materialRows = {}
+    -- Pre-built row pool: create once, update text/callbacks on page change
+    local rowPool = {}      -- array of {row, nameText, favBtn, applyBtn, selectBtn}
+    local pageInfoText = nil
+    local navRow = nil
+    local navButtons = {}   -- array of button widgets for page nav
+    local subcatHeaders = {} -- array of TextBlock widgets for subcategory headers
+    local listVBox = makeVBox(root)
+    scrollBox:AddChild(listVBox)
 
-        -- Clear scrollbox children
-        pcall(function()
-            local childCount = scrollBox:GetChildrenCount()
-            for i = childCount - 1, 0, -1 do
-                local child = scrollBox:GetChildAt(i)
-                if child then scrollBox:RemoveChild(child) end
-            end
-        end)
+    -- Build the fixed pool of PAGE_SIZE rows + nav + headers
+    local function buildRowPool()
+        pageInfoText = makeText(root, "", {size=11, opacity=0.35})
+        listVBox:AddChild(pageInfoText)
 
-        local listVBox = makeVBox(root)
-        scrollBox:AddChild(listVBox)
-
-        local totalPages = math.max(1, math.ceil(#filteredMats / PAGE_SIZE))
-        if currentPage > totalPages then currentPage = totalPages end
-        savedPage = currentPage
-
-        -- Page info header
-        local pageInfo = makeText(root, string.format(
-            "%d materials — Page %d/%d", #filteredMats, currentPage, totalPages),
-            {size=11, opacity=0.35})
-        listVBox:AddChild(pageInfo)
-
-        -- Page navigation: [1] [3] [4] [5] [6] [7] [12]
-        -- Jump-back on left (clamped), 5 sequential centered, jump-forward on right (clamped)
-        if totalPages > 1 then
-            local navRow = makeHBox(root)
-
-            local function addPageBtn(p)
-                local pageNum = p
-                local pageBtn = makeButton(root, tostring(p), function()
-                    currentPage = pageNum
-                    savedPage = currentPage
-                    renderPage()
-                end)
-                pcall(function()
-                    pageBtn:SetRenderOpacity(p == currentPage and 1.0 or 0.4)
-                end)
-                navRow:AddChildToHorizontalBox(pageBtn)
-            end
-
-            -- Jump back: current - 5, clamped to 1
-            local jumpBack = math.max(1, currentPage - 5)
-
-            -- Center window: 5 sequential pages centered on current
-            local startP = math.max(1, currentPage - 2)
-            local endP = math.min(totalPages, startP + 4)
-            startP = math.max(1, endP - 4)
-
-            -- Jump forward: current + 5, clamped to totalPages
-            local jumpFwd = math.min(totalPages, currentPage + 5)
-
-            -- Left jump (only if it's outside the center window)
-            if jumpBack < startP then
-                addPageBtn(jumpBack)
-            end
-
-            -- Center window
-            for p = startP, endP do
-                addPageBtn(p)
-            end
-
-            -- Right jump (only if it's outside the center window)
-            if jumpFwd > endP then
-                addPageBtn(jumpFwd)
-            end
-
-            listVBox:AddChild(navRow)
+        -- Nav row with max 7 button slots
+        navRow = makeHBox(root)
+        listVBox:AddChild(navRow)
+        for i = 1, 7 do
+            local btn = makeButton(root, " ", function() end)
+            navRow:AddChildToHorizontalBox(btn)
+            table.insert(navButtons, btn)
         end
 
-        -- Material rows for current page, with subcategory headers in Curated mode
-        local startIdx = (currentPage - 1) * PAGE_SIZE + 1
-        local endIdx = math.min(startIdx + PAGE_SIZE - 1, #filteredMats)
-        local lastSubcat = nil
+        -- Subcategory header slots (max 6 categories visible per page)
+        for i = 1, 6 do
+            local header = makeText(root, "", {size=11, opacity=0.35})
+            table.insert(subcatHeaders, header)
+        end
 
-        for i = startIdx, endIdx do
-            local mat = filteredMats[i]
-
-            -- Subcategory header (in Curated/Favourites/ALL modes)
-            if isCuratedMode() or isFavouritesMode() or isShowAll() then
-                local subcat = materials.getCuratedSubcategory(mat.name)
-                if subcat ~= lastSubcat then
-                    lastSubcat = subcat
-                    local header = makeText(root, "— " .. subcat .. " —", {size=11, opacity=0.35})
-                    listVBox:AddChild(header)
-                end
-            end
-
+        -- Material row slots
+        for i = 1, PAGE_SIZE do
             local row = makeHBox(root)
-
-            -- Use curated label if available, otherwise material name
-            local MAX_NAME_LEN = 45
-            local isSelected = (mat.path == selectedMaterialPath)
-            local displayName = materials.getCuratedLabel(mat.name)
-            if #displayName > MAX_NAME_LEN then
-                displayName = "..." .. displayName:sub(-(MAX_NAME_LEN - 3))
-            end
-            if isSelected then
-                displayName = displayName .. "  <<<"
-            end
-            local nameText = makeText(root, displayName,
-                {size=12, opacity = isSelected and 1.0 or 0.6})
+            local nameText = makeText(root, "")
             row:AddChildToHorizontalBox(nameText)
 
-            -- Fill spacer
             local spacer = StaticConstructObject(classes.sizeBox, root, newName("Spacer"))
             pcall(function() spacer:SetMinDesiredWidth(20) end)
             local spacerSlot = row:AddChildToHorizontalBox(spacer)
             pcall(function() spacerSlot:SetSize({ SizeRule = 1, Value = 1.0 }) end)
 
-            local matPath = mat.path
-            local matName = mat.name
-
-            -- FAV button
-            local favLabel = favourites[matPath] and "UNFAV" or "FAV"
-            local favBtn = makeButton(root, favLabel, function()
-                toggleFavourite(matPath)
-                if isFavouritesMode() then
-                    rebuildFilteredList()
-                    currentPage = 1
-                end
-                renderPage()
-            end)
+            local favBtn = makeButton(root, "FAV", function() end)
             row:AddChildToHorizontalBox(favBtn)
 
-            -- APPLY button
-            local applyBtn = makeButton(root, "APPLY", function()
-                if onApply then onApply(matPath, matName) end
-            end)
+            local applyBtn = makeButton(root, "APPLY", function() end)
             row:AddChildToHorizontalBox(applyBtn)
 
-            -- SELECT button
-            local selectBtn = makeButton(root, "SELECT", function()
-                if onSelect then onSelect(matPath, matName) end
-                ui.close()
-            end)
+            local selectBtn = makeButton(root, "SELECT", function() end)
             row:AddChildToHorizontalBox(selectBtn)
 
             listVBox:AddChild(row)
-            table.insert(materialRows, { row = row, category = mat.category })
+            table.insert(rowPool, {
+                row = row, nameText = nameText,
+                favBtn = favBtn, applyBtn = applyBtn, selectBtn = selectBtn,
+            })
+        end
+    end
+    buildRowPool()
+
+    -- Render: update text + callbacks on existing widgets (no creation!)
+    renderPage = function()
+        local totalPages = math.max(1, math.ceil(#filteredMats / PAGE_SIZE))
+        if currentPage > totalPages then currentPage = totalPages end
+        savedPage = currentPage
+
+        -- Update page info
+        pcall(function()
+            pageInfoText:SetText(FText(string.format(
+                "%d materials — Page %d/%d", #filteredMats, currentPage, totalPages)))
+        end)
+
+        -- Update nav buttons
+        local pageNums = {}
+        if totalPages > 1 then
+            pcall(function() navRow:SetVisibility(0) end)
+            local jumpBack = math.max(1, currentPage - 5)
+            local startP = math.max(1, currentPage - 2)
+            local endP = math.min(totalPages, startP + 4)
+            startP = math.max(1, endP - 4)
+            local jumpFwd = math.min(totalPages, currentPage + 5)
+            if jumpBack < startP then table.insert(pageNums, jumpBack) end
+            for p = startP, endP do table.insert(pageNums, p) end
+            if jumpFwd > endP then table.insert(pageNums, jumpFwd) end
+        else
+            pcall(function() navRow:SetVisibility(1) end)
+        end
+
+        for i, btn in ipairs(navButtons) do
+            local p = pageNums[i]
+            if p then
+                pcall(function() btn:SetVisibility(0) end)
+                pcall(function() btn:SetText(FText(tostring(p))) end)
+                pcall(function() btn:SetRenderOpacity(p == currentPage and 1.0 or 0.4) end)
+                local pageNum = p
+                buttonActions[tostring(btn:GetAddress())] = function()
+                    currentPage = pageNum
+                    savedPage = currentPage
+                    renderPage()
+                end
+            else
+                pcall(function() btn:SetVisibility(1) end)
+            end
+        end
+
+        -- Hide all subcategory headers first
+        for _, h in ipairs(subcatHeaders) do
+            pcall(function() h:SetVisibility(1) end)
+        end
+
+        -- Material rows
+        local startIdx = (currentPage - 1) * PAGE_SIZE + 1
+        local endIdx = math.min(startIdx + PAGE_SIZE - 1, #filteredMats)
+        local lastSubcat = nil
+        local headerIdx = 0
+
+        for slot = 1, PAGE_SIZE do
+            local pool = rowPool[slot]
+            local i = startIdx + slot - 1
+
+            if i <= endIdx then
+                local mat = filteredMats[i]
+                pcall(function() pool.row:SetVisibility(0) end)
+
+                -- Subcategory header
+                if isCuratedMode() or isFavouritesMode() or isShowAll() then
+                    local subcat = materials.getCuratedSubcategory(mat.name)
+                    if subcat ~= lastSubcat then
+                        lastSubcat = subcat
+                        headerIdx = headerIdx + 1
+                        if headerIdx <= #subcatHeaders then
+                            local h = subcatHeaders[headerIdx]
+                            pcall(function()
+                                h:SetText(FText("— " .. subcat .. " —"))
+                                h:SetVisibility(0)
+                            end)
+                            -- Move header before this row (can't reorder, but visibility is enough)
+                        end
+                    end
+                end
+
+                -- Update name
+                local MAX_NAME_LEN = 45
+                local isSelected = (mat.path == selectedMaterialPath)
+                local displayName = materials.getCuratedLabel(mat.name)
+                if #displayName > MAX_NAME_LEN then
+                    displayName = "..." .. displayName:sub(-(MAX_NAME_LEN - 3))
+                end
+                if isSelected then displayName = displayName .. "  <<<" end
+                pcall(function()
+                    pool.nameText:SetText(FText(displayName))
+                    pool.nameText:SetRenderOpacity(isSelected and 1.0 or 0.6)
+                end)
+
+                -- Update FAV button text
+                local matPath = mat.path
+                local matName = mat.name
+                pcall(function()
+                    pool.favBtn:SetText(FText(favourites[matPath] and "UNFAV" or "FAV"))
+                end)
+
+                -- Update button callbacks
+                buttonActions[tostring(pool.favBtn:GetAddress())] = function()
+                    toggleFavourite(matPath)
+                    if isFavouritesMode() then
+                        rebuildFilteredList()
+                        currentPage = 1
+                    end
+                    renderPage()
+                end
+                buttonActions[tostring(pool.applyBtn:GetAddress())] = function()
+                    if onApply then onApply(matPath, matName) end
+                end
+                buttonActions[tostring(pool.selectBtn:GetAddress())] = function()
+                    if onSelect then onSelect(matPath, matName) end
+                    ui.close()
+                end
+            else
+                -- Hide unused rows
+                pcall(function() pool.row:SetVisibility(1) end)
+            end
         end
     end
 
@@ -629,21 +667,24 @@ function ui.open(onApply, onSelect)
     onApplyCallback = onApply
     onSelectCallback = onSelect
 
-    loadFavourites()  -- refresh in case file was edited
-    local root = buildUI(onApply, onSelect)
-    if not root then
-        print("[PaintBrush] ui.open: buildUI failed\n")
-        return
+    -- First open: build everything. Subsequent opens: reuse cached widget as-is.
+    if not rootWidget then
+        loadFavourites()
+        local root = buildUI(onApply, onSelect)
+        if not root then
+            print("[PaintBrush] ui.open: buildUI failed\n")
+            return
+        end
+        rootWidget = root
     end
 
-    rootWidget = root
-    root:AddToViewport(200)
+    rootWidget:AddToViewport(200)
 
     -- Switch to UI-only input
     local pc = UEHelpers:GetPlayerController()
     if pc then
         pcall(function()
-            classes.wbLib:SetInputMode_UIOnlyEx(pc, root, 0, true)
+            classes.wbLib:SetInputMode_UIOnlyEx(pc, rootWidget, 0, true)
             pc.bShowMouseCursor = true
         end)
     end
@@ -658,7 +699,6 @@ function ui.open(onApply, onSelect)
     end)
 
     isOpen = true
-    print("[PaintBrush] ui.open: material picker opened\n")
 end
 
 function ui.close()
@@ -673,10 +713,9 @@ function ui.close()
         modalBlocker = nil
     end
 
-    -- Remove root widget
+    -- Hide widget (don't destroy — reuse on next open)
     if rootWidget then
         pcall(function() rootWidget:RemoveFromViewport() end)
-        rootWidget = nil
     end
 
     -- Restore game input
@@ -688,18 +727,26 @@ function ui.close()
         end)
     end
 
-    -- Clear button actions to avoid stale references
-    buttonActions = {}
-    categoryButtons = {}
-    materialRows = {}
-    onSelectCallback = nil
-
     isOpen = false
-    print("[PaintBrush] ui.close: material picker closed\n")
 end
 
 function ui.isOpen()
     return isOpen
+end
+
+-- Invalidate cached UI (call on map load / world change)
+function ui.invalidateCache()
+    if rootWidget then
+        pcall(function() rootWidget:RemoveFromViewport() end)
+    end
+    rootWidget = nil
+    buttonActions = {}
+    categoryButtons = {}
+    materialRows = {}
+    brushButtons = {}
+    rebuildMaterialList = nil
+    rebuildFilteredList = nil
+    renderPage = nil
 end
 
 function ui.getBrushRadius()
