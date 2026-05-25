@@ -738,23 +738,11 @@ end
 
 -- Invalidate cached UI (call on map load / world change)
 function ui.invalidateCache()
-    _hookDisabled = true  -- prevent hook from accessing destroyed widgets during shutdown
-    -- Pop modal blocker if UI was open during world change
-    if modalBlocker then
-        pcall(function()
-            local wm = FindFirstOf("WindowManager")
-            if wm then wm:Pop(modalBlocker) end
-        end)
-        modalBlocker = nil
-    end
+    _hookDisabled = true
+    -- NO UObject access here — world may be partially destroyed during teardown.
+    -- Just nil all Lua refs. UE will GC everything when the world unloads.
+    modalBlocker = nil
     textures.invalidate()
-    if rootWidget then
-        pcall(function()
-            if rootWidget:IsValid() then
-                rootWidget:RemoveFromViewport()
-            end
-        end)
-    end
     classes = {}
     rootWidget = nil
     buttonActions = {}

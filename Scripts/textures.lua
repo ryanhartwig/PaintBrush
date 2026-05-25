@@ -74,9 +74,8 @@ function textures.get(name)
 end
 
 function textures.invalidate()
-    if anchor then
-        pcall(function() anchor:RemoveFromViewport() end)
-    end
+    -- Don't call RemoveFromViewport — widget may already be destroyed during teardown
+    -- UE will GC the widget when the world unloads
     cache = {}
     anchor = nil
 end
