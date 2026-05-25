@@ -97,11 +97,13 @@ end
 
 local buttonActions = {}
 local buttonHookRegistered = false
+local _hookDisabled = false  -- set true on invalidateCache, false on ui.open
 
 local function registerButtonHook()
     if buttonHookRegistered then return end
     pcall(function()
         RegisterHook("/Script/CommonUI.CommonButtonBase:HandleButtonClicked", function(self)
+            if _hookDisabled then return end
             local widget = self:get()
             if not widget or not widget:IsValid() then return end
             local addr = tostring(widget:GetAddress())
@@ -657,6 +659,7 @@ end
 
 function ui.open(onApply, onSelect)
     if isOpen then return end
+    _hookDisabled = false  -- re-enable hook (was disabled on map load/invalidate)
 
     onApplyCallback = onApply
     onSelectCallback = onSelect
@@ -731,6 +734,7 @@ end
 
 -- Invalidate cached UI (call on map load / world change)
 function ui.invalidateCache()
+    _hookDisabled = true  -- prevent hook from accessing destroyed widgets during shutdown
     -- Pop modal blocker if UI was open during world change
     if modalBlocker then
         pcall(function()
