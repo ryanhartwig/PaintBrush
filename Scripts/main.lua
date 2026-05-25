@@ -70,13 +70,21 @@ RegisterLoadMapPostHook(function(engine, world)
                 print("[PaintBrush] Waiting for state from host (client)\n")
             end
             _stateLoaded = true
-            -- Request state from host. Retry at 8s and 16s in case host is slow or first request dropped.
-            sync.requestState()
+            -- Request state from host. Retry at 8s and 16s only if no state received yet.
+            local function requestIfEmpty()
+                local cells = painter.getPaintedCells()
+                local hasAny = false
+                for _ in pairs(cells) do hasAny = true; break end
+                if not hasAny then
+                    sync.requestState()
+                end
+            end
+            requestIfEmpty()
             ExecuteWithDelay(8000, function()
-                ExecuteInGameThread(function() sync.requestState() end)
+                ExecuteInGameThread(requestIfEmpty)
             end)
             ExecuteWithDelay(16000, function()
-                ExecuteInGameThread(function() sync.requestState() end)
+                ExecuteInGameThread(requestIfEmpty)
             end)  -- clients: get state from host; host: self-request (ignored)
         end)
     end)
