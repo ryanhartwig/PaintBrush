@@ -323,10 +323,10 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             if not isLocal then
                 local base = getBaseByGuid(guid)
                 if base then
-                    painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
+                    -- Use incremental path (skipRebuild=false) — no Empty(), no crash
+                    painter.applyBatch(base, decodeCells(cellsStr), matPath, true, false)
                 end
                 if _onSaveNeeded then _onSaveNeeded() end
-                painter.scheduleRebuild()
             end
             relayToOthers(MSG_RELAY_PAINT .. guid .. "|" .. cellsStr .. "|" .. matPath)
         end
@@ -338,10 +338,9 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             if not isLocal then
                 local base = getBaseByGuid(guid)
                 if base then
-                    painter.eraseBatch(base, decodeCells(cellsStr), true, true)
+                    painter.eraseBatch(base, decodeCells(cellsStr), true, false)
                 end
                 if _onSaveNeeded then _onSaveNeeded() end
-                painter.scheduleRebuild()
             end
             relayToOthers(MSG_RELAY_ERASE .. guid .. "|" .. cellsStr)
         end
@@ -392,8 +391,8 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr and matPath then
             local base = getBaseByGuid(guid)
             if base then
-                painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
-                painter.scheduleRebuild()
+                -- Use incremental path directly — no Empty(), no crash
+                painter.applyBatch(base, decodeCells(cellsStr), matPath, true, false)
                 painter.scheduleDeferredRebuild()
             end
         end
@@ -407,8 +406,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr then
             local base = getBaseByGuid(guid)
             if base then
-                painter.eraseBatch(base, decodeCells(cellsStr), true, true)
-                painter.scheduleRebuild()
+                painter.eraseBatch(base, decodeCells(cellsStr), true, false)
             end
         end
         return
