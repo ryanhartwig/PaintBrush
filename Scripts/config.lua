@@ -4,7 +4,7 @@ config.ModDir = debug.getinfo(1, "S").source:match("@(.*/)")  .. "../"
 config.VERSION = "1.0.0"
 
 -- Defaults
-config.PaintKey = "P"
+config.PaintKey = "E"
 config.UndoKey = "Z"
 config.TraceDistance = 5000
 config.MaxUndoStack = 50

@@ -94,7 +94,7 @@ end)
 -- O = open material picker UI
 local pendingTarget = nil  -- stores detection info while UI is open
 
-RegisterKeyBind(Key.O, function()
+RegisterKeyBind(Key.B, function()
     ExecuteInGameThread(function()
         if ui.isOpen() then
             ui.close()
@@ -129,7 +129,9 @@ RegisterKeyBind(Key.O, function()
                         end
                     end
                 end
+                painter.applyBatch(pendingTarget.base, cells, matPath)
                 sync.sendPaint(pendingTarget.base, cells, matPath)
+                if config.AutoSave then state.save() end
                 print(string.format("[PaintBrush] Applied %s (UI stays open)\n", matName))
             end
         end
@@ -171,7 +173,8 @@ RegisterKeyBind(Key[config.PaintKey], function()
         local size = (r * 2 + 1)
 
         if ui.isEraserMode() then
-            sync.sendErase(info.base, cells)
+            painter.eraseBatch(info.base, cells)                -- local: instant + undo
+            sync.sendErase(info.base, cells)                    -- network: sync to others
             print(string.format("[PaintBrush] Erased %dx%dx%d at (%d,%d,%d)\n",
                 size, size, size, cc.X, cc.Y, cc.Z))
         else
@@ -180,7 +183,8 @@ RegisterKeyBind(Key[config.PaintKey], function()
                 print("[PaintBrush] No material selected\n")
                 return
             end
-            sync.sendPaint(info.base, cells, matPath)
+            painter.applyBatch(info.base, cells, matPath)       -- local: instant + undo
+            sync.sendPaint(info.base, cells, matPath)            -- network: sync to others
             print(string.format("[PaintBrush] Painted %dx%dx%d at (%d,%d,%d) with %s\n",
                 size, size, size, cc.X, cc.Y, cc.Z, matName))
         end
@@ -190,13 +194,15 @@ RegisterKeyBind(Key[config.PaintKey], function()
     end)
 end)
 
--- Z = undo (routes through sync so host stays authoritative)
+-- Z = undo (local apply + save, sync will reconcile on next broadcast)
 RegisterKeyBind(Key[config.UndoKey], function()
     ExecuteInGameThread(function()
         ensureStateLoaded()
-        local undone = sync.sendUndo()
+        local undone = painter.undo()
         if undone then
-            print("[PaintBrush] Undo sent\n")
+            if config.AutoSave then state.save() end
+            sync.broadcastCurrentState()  -- override any stale sync broadcasts
+            print("[PaintBrush] Undo successful\n")
         else
             print("[PaintBrush] Nothing to undo\n")
         end

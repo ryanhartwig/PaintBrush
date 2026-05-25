@@ -146,11 +146,17 @@ local function broadcastState()
     if not jsonStr then return end
     local msg = MSG_STATE .. jsonStr
 
+    -- Get local PC to skip self (host already applied locally)
+    local localPC = nil
+    pcall(function() localPC = UEHelpers:GetPlayerController() end)
+
     local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
     if not targets then return end
     for _, pc in ipairs(targets) do
         pcall(function()
-            if pc:IsValid() and not pc:HasAnyFlags(EObjectFlags.RF_ClassDefaultObject) then
+            if pc:IsValid()
+               and not pc:HasAnyFlags(EObjectFlags.RF_ClassDefaultObject)
+               and pc ~= localPC then
                 pc:ClientMessage(msg, FName("Event"), 10.0)
             end
         end)
@@ -174,32 +180,42 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
     local ok, raw = pcall(function() return msgParam:get():ToString() end)
     if not ok or not raw or raw:sub(1, 3) ~= PREFIX then return end
 
+    -- Check if sender is local player (already applied locally, skip duplicate)
+    local isLocal = false
+    pcall(function()
+        local senderPC = ctx:get()
+        local localPC = UEHelpers:GetPlayerController()
+        if senderPC and localPC then
+            isLocal = (senderPC:GetFullName() == localPC:GetFullName())
+        end
+    end)
+
     if raw:sub(1, #MSG_PAINT) == MSG_PAINT then
-        -- PB_PAINT|guid|cells|materialPath
         local payload = raw:sub(#MSG_PAINT + 1)
         local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
         if guid and cellsStr and matPath then
-            local base = findBaseByGuid(guid)
-            if base then
-                local cells = decodeCells(cellsStr)
-                painter.applyBatch(base, cells, matPath)
-                state.save()
-                broadcastState()
+            if not isLocal then
+                local base = findBaseByGuid(guid)
+                if base then
+                    painter.applyBatch(base, decodeCells(cellsStr), matPath)
+                end
             end
+            state.save()
+            broadcastState()
         end
 
     elseif raw:sub(1, #MSG_ERASE) == MSG_ERASE then
-        -- PB_ERASE|guid|cells
         local payload = raw:sub(#MSG_ERASE + 1)
         local guid, cellsStr = payload:match("^([^|]+)|(.+)$")
         if guid and cellsStr then
-            local base = findBaseByGuid(guid)
-            if base then
-                local cells = decodeCells(cellsStr)
-                painter.eraseBatch(base, cells)
-                state.save()
-                broadcastState()
+            if not isLocal then
+                local base = findBaseByGuid(guid)
+                if base then
+                    painter.eraseBatch(base, decodeCells(cellsStr))
+                end
             end
+            state.save()
+            broadcastState()
         end
 
     elseif raw == MSG_REQ then
@@ -225,6 +241,11 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
 
     print("[PaintBrush] sync: received state from host\n")
 end)
+
+-- Broadcast current state (called after local undo to override stale broadcasts)
+function sync.broadcastCurrentState()
+    broadcastState()
+end
 
 print("[PaintBrush] sync: multiplayer hooks registered\n")
 

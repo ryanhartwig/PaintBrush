@@ -1,7 +1,7 @@
 # PaintBrush Configuration
 
 # Keybinds
-PaintKey=P
+PaintKey=E
 UndoKey=Z
 
 # Behavior

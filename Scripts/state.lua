@@ -413,7 +413,7 @@ function state.applyFromJson(jsonStr)
     end
 
     painter.setPaintedCells(newPaintedCells)
-    painter.clearHistory()
+    -- Do NOT clear undo history here — undo is local-only and should survive sync broadcasts
     for _, base in ipairs(rebuiltBases) do
         pcall(painter.rebuild, base)
     end

@@ -446,6 +446,16 @@ local function buildUI(onApply, onSelect)
             table.insert(filteredMats, mat)
             ::nextMat::
         end
+
+        -- Sort by curated subcategory then label when in Curated mode
+        if showCurated then
+            table.sort(filteredMats, function(a, b)
+                local sa = materials.getCuratedSubcategory(a.name)
+                local sb = materials.getCuratedSubcategory(b.name)
+                if sa ~= sb then return sa < sb end
+                return materials.getCuratedLabel(a.name) < materials.getCuratedLabel(b.name)
+            end)
+        end
     end
 
     -- Render current page of materials
@@ -521,23 +531,30 @@ local function buildUI(onApply, onSelect)
             listVBox:AddChild(navRow)
         end
 
-        -- Material rows for current page
+        -- Material rows for current page, with subcategory headers in Curated mode
         local startIdx = (currentPage - 1) * PAGE_SIZE + 1
         local endIdx = math.min(startIdx + PAGE_SIZE - 1, #filteredMats)
+        local lastSubcat = nil
 
         for i = startIdx, endIdx do
             local mat = filteredMats[i]
+
+            -- Subcategory header (in Curated/Favourites/ALL modes)
+            if isCuratedMode() or isFavouritesMode() or isShowAll() then
+                local subcat = materials.getCuratedSubcategory(mat.name)
+                if subcat ~= lastSubcat then
+                    lastSubcat = subcat
+                    local header = makeText(root, "— " .. subcat .. " —", {size=11, opacity=0.35})
+                    listVBox:AddChild(header)
+                end
+            end
+
             local row = makeHBox(root)
 
-            -- Material name (clip from start if too long, show the end)
-            local MAX_NAME_LEN = 40
+            -- Use curated label if available, otherwise material name
+            local MAX_NAME_LEN = 45
             local isSelected = (mat.path == selectedMaterialPath)
-            if i == startIdx then
-                print(string.format("[PaintBrush] highlight check: selected=%s, first mat=%s, match=%s\n",
-                    tostring(selectedMaterialPath and selectedMaterialPath:sub(-30) or "nil"),
-                    mat.path:sub(-30), tostring(isSelected)))
-            end
-            local displayName = mat.name
+            local displayName = materials.getCuratedLabel(mat.name)
             if #displayName > MAX_NAME_LEN then
                 displayName = "..." .. displayName:sub(-(MAX_NAME_LEN - 3))
             end

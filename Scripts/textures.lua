@@ -5,9 +5,12 @@ local textures = {}
 local cache = {}
 local anchor = nil  -- hidden widget that roots textures to prevent GC
 
-local BG_PATH = config.ModDir .. "assets/background.png"
+-- Normalize to backslashes for Windows (ImportFileAsTexture2D needs native path)
+local BG_PATH = (config.ModDir .. "assets/background.png"):gsub("/", "\\")
 
 function textures.load()
+    if cache.background then return end  -- only load once
+
     local krl = StaticFindObject("/Script/Engine.Default__KismetRenderingLibrary")
     local pc = UEHelpers:GetPlayerController()
     if not krl or not pc then
@@ -15,9 +18,15 @@ function textures.load()
         return
     end
 
-    cache.background = krl:ImportFileAsTexture2D(pc, BG_PATH)
-    if not cache.background then
-        print("[PaintBrush] textures.load: failed to load background PNG\n")
+    print(string.format("[PaintBrush] textures.load: loading %s\n", BG_PATH))
+    local loadOk, tex = pcall(function()
+        return krl:ImportFileAsTexture2D(pc, BG_PATH)
+    end)
+    if loadOk and tex then
+        cache.background = tex
+    else
+        print(string.format("[PaintBrush] textures.load: failed: %s\n", tostring(tex)))
+        return
     end
 
     -- Root textures in a hidden widget to prevent UE GC
