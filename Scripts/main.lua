@@ -14,6 +14,12 @@ local function parseCellKey(key)
     return {X = tonumber(x), Y = tonumber(y), Z = tonumber(z)}
 end
 
+-- Detect if we're the host (have a save game) or a client (no save game)
+local function isHost()
+    local save = FindFirstOf("UWESaveGame")
+    return save and save:IsValid()
+end
+
 -- Material cycling — rebuilt after map load when materials are available
 local browseMats = {}
 local selectedIdx = 1
@@ -36,25 +42,33 @@ end
 local function ensureStateLoaded()
     if _stateLoaded then return end
     rebuildBrowseList()
-    state.load()
+    if isHost() then
+        state.load()
+        sync.setHostReady()
+        print("[PaintBrush] State lazy-loaded (host)\n")
+    else
+        print("[PaintBrush] State lazy-loaded (client, skipping local file)\n")
+    end
     _stateLoaded = true
-    sync.setHostReady()
-    print("[PaintBrush] State lazy-loaded\n")
 end
 
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 RegisterLoadMapPostHook(function(engine, world)
-    _stateLoaded = false  -- reset so next action triggers fresh load
+    _stateLoaded = false
     ExecuteWithDelay(3000, function()
         ExecuteInGameThread(function()
             painter.setPaintedCells({})
             painter.clearHistory()
             rebuildBrowseList()
-            state.load()
+            if isHost() then
+                state.load()
+                sync.setHostReady()
+                print("[PaintBrush] State loaded for current save (host)\n")
+            else
+                print("[PaintBrush] Waiting for state from host (client)\n")
+            end
             _stateLoaded = true
-            sync.setHostReady()
-            sync.requestState()
-            print("[PaintBrush] State loaded for current save\n")
+            sync.requestState()  -- clients: get state from host; host: self-request (ignored)
         end)
     end)
 end)
@@ -137,7 +151,7 @@ RegisterKeyBind(Key.B, function()
                 end
                 painter.applyBatch(pendingTarget.base, cells, matPath)
                 sync.sendPaint(pendingTarget.base, cells, matPath)
-                if config.AutoSave then state.save() end
+                if config.AutoSave and isHost() then state.save() end
                 print(string.format("[PaintBrush] Applied %s (UI stays open)\n", matName))
             end
         end
@@ -194,7 +208,7 @@ RegisterKeyBind(Key[config.PaintKey], function()
             print(string.format("[PaintBrush] Painted %dx%dx%d at (%d,%d,%d) with %s\n",
                 size, size, size, cc.X, cc.Y, cc.Z, matName))
         end
-        if config.AutoSave then
+        if config.AutoSave and isHost() then
             state.save()
         end
     end)
@@ -240,7 +254,7 @@ RegisterKeyBind(Key[config.UndoKey], function()
             end
         end
 
-        if config.AutoSave then state.save() end
+        if config.AutoSave and isHost() then state.save() end
         print("[PaintBrush] Undo successful\n")
     end)
 end)

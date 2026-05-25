@@ -329,8 +329,8 @@ local function buildUI(onApply, onSelect)
         bgSlot:SetAutoSize(false)
     end
 
-    -- Re-enumerate materials (world is loaded by now, mod load time has too few)
-    materials.enumerate(true)
+    -- Ensure materials are loaded (lazy, no force re-scan — map load hook handles that)
+    materials.enumerate()
 
     -- Reset filter state
     categoryButtons = {}
