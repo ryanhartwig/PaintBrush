@@ -77,14 +77,32 @@ end
 -- Sending (any player → host)
 --------------------------------------------------------------------------------
 
--- Check if we're the host with no other players (true singleplayer — safe to skip network)
+-- Cached solo host detection (reset on map load + when players join/leave)
+local _isSoloHostCached = nil
+local _soloHostCacheTime = 0
+
 local function isSoloHost()
+    -- Re-check every 5 seconds (players can join/leave)
+    local now = os.clock()
+    if _isSoloHostCached ~= nil and (now - _soloHostCacheTime) < 5.0 then
+        return _isSoloHostCached
+    end
     -- Clients always return false (they MUST send RPCs to the host)
     local save = FindFirstOf("UWESaveGame")
-    if not save or not save:IsValid() then return false end  -- client, not host
+    if not save or not save:IsValid() then
+        _isSoloHostCached = false
+        _soloHostCacheTime = now
+        return false
+    end
     local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
-    if not targets then return true end
-    return #targets <= 1
+    _isSoloHostCached = (not targets or #targets <= 1)
+    _soloHostCacheTime = now
+    return _isSoloHostCached
+end
+
+function sync.invalidateCache()
+    _isSoloHostCached = nil
+    _soloHostCacheTime = 0
 end
 
 function sync.sendPaint(base, cellCoordsList, materialPath)

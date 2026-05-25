@@ -14,10 +14,14 @@ local function parseCellKey(key)
     return {X = tonumber(x), Y = tonumber(y), Z = tonumber(z)}
 end
 
--- Detect if we're the host (have a save game) or a client (no save game)
+-- Cached host detection (reset on map load)
+local _isHostCached = nil
+
 local function isHost()
+    if _isHostCached ~= nil then return _isHostCached end
     local save = FindFirstOf("UWESaveGame")
-    return save and save:IsValid()
+    _isHostCached = (save ~= nil and save:IsValid())
+    return _isHostCached
 end
 
 local function reloadMaterials()
@@ -56,6 +60,8 @@ end
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 RegisterLoadMapPostHook(function(engine, world)
     _stateLoaded = false
+    _isHostCached = nil
+    sync.invalidateCache()
     pcall(ui.invalidateCache)  -- new world = new widget tree needed (pcall: may fire during teardown)
     ExecuteWithDelay(3000, function()
         ExecuteInGameThread(function()
