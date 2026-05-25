@@ -66,13 +66,11 @@ local _lastLoadedSlot = nil
 local _mapLoadGeneration = 0  -- incremented on each map load; stale callbacks bail out
 
 RegisterLoadMapPostHook(function(engine, world)
-    _worldReady = false  -- block undo/paint during transition
+    _worldReady = false
     _mapLoadGeneration = _mapLoadGeneration + 1
     local gen = _mapLoadGeneration
-    -- Flush any pending save NOW before state gets wiped
-    if _saveTimer and _isHostCached then
-        pcall(state.save)
-    end
+    -- Don't flush-save here — world may be partially destroyed during teardown.
+    -- The debounced save writes within 2s of any paint, so at most 2s of data is at risk.
     _isHostCached = nil
     _saveTimer = nil
     _saveGeneration = _saveGeneration + 1  -- invalidate any pending debounced save
