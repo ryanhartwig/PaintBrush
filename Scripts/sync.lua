@@ -14,7 +14,8 @@ local _onSaveNeeded = nil  -- set by main.lua to debouncedSave
 function sync.setSaveCallback(cb)
     _onSaveNeeded = cb
 end
-local _deferredRebuildScheduled = false  -- set by main.lua after state.load() completes
+local _deferredRebuildScheduled = false
+local _debouncedRebuildScheduled = false  -- set by main.lua after state.load() completes
 
 function sync.setHostReady()
     hostStateReady = true
@@ -132,6 +133,7 @@ function sync.invalidateCache()
     _localPCName = nil
     _guidToBase = nil
     _deferredRebuildScheduled = false
+    _debouncedRebuildScheduled = false
 end
 
 function sync.sendPaint(base, cellCoordsList, materialPath)
@@ -425,14 +427,28 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr and matPath then
             local base = getBaseByGuid(guid)
             if base then
-                painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
-                -- Schedule a deferred rebuild to catch late-streaming materials
+                -- skipRebuild=true: defer rebuild to avoid rapid Empty/recreate/ForceFullBaseUpdate crashes
+                painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
+                -- Schedule a short debounced rebuild (200ms) for interactive feedback
+                -- Plus a long deferred rebuild (8s) for late-streaming materials
+                if not _debouncedRebuildScheduled then
+                    _debouncedRebuildScheduled = true
+                    ExecuteWithDelay(200, function()
+                        ExecuteInGameThread(function()
+                            _debouncedRebuildScheduled = false
+                            for _, baseData in pairs(painter.getPaintedCells()) do
+                                if baseData.base and baseData.base:IsValid() then
+                                    pcall(painter.rebuild, baseData.base)
+                                end
+                            end
+                        end)
+                    end)
+                end
                 if not _deferredRebuildScheduled then
                     _deferredRebuildScheduled = true
                     ExecuteWithDelay(8000, function()
                         ExecuteInGameThread(function()
                             _deferredRebuildScheduled = false
-                            -- Rebuild all bases that have painted cells
                             for _, baseData in pairs(painter.getPaintedCells()) do
                                 if baseData.base and baseData.base:IsValid() then
                                     pcall(painter.rebuild, baseData.base)
@@ -454,7 +470,20 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr then
             local base = getBaseByGuid(guid)
             if base then
-                painter.eraseBatch(base, decodeCells(cellsStr), true)
+                painter.eraseBatch(base, decodeCells(cellsStr), true, true)
+                if not _debouncedRebuildScheduled then
+                    _debouncedRebuildScheduled = true
+                    ExecuteWithDelay(200, function()
+                        ExecuteInGameThread(function()
+                            _debouncedRebuildScheduled = false
+                            for _, baseData in pairs(painter.getPaintedCells()) do
+                                if baseData.base and baseData.base:IsValid() then
+                                    pcall(painter.rebuild, baseData.base)
+                                end
+                            end
+                        end)
+                    end)
+                end
                 print("[PaintBrush] sync: relayed erase\n")
             end
         end

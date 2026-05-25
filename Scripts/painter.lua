@@ -103,8 +103,9 @@ function painter.apply(base, cellCoords, materialPath)
     painter.applyBatch(base, {cellCoords}, materialPath)
 end
 
--- skipUndo: true when applying remote actions (don't pollute local undo stack)
-function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo)
+-- skipUndo: true when applying remote actions
+-- skipRebuild: true when batching multiple operations (caller will rebuild once at end)
+function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo, skipRebuild)
     local tBatch0 = os.clock()
     local key = baseKey(base)
 
@@ -140,7 +141,9 @@ function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo)
     end
     local tUpsertDone = os.clock()
 
-    painter.rebuild(base)
+    if not skipRebuild then
+        painter.rebuild(base)
+    end
     print(string.format("[PaintBrush] applyBatch perf: %d cells | undo=%.1fms upsert=%.1fms TOTAL=%.1fms (rebuild above)\n",
         #cellCoordsList,
         (tUpsert - tBatch0) * 1000,
@@ -148,7 +151,7 @@ function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo)
         (os.clock() - tBatch0) * 1000))
 end
 
-function painter.eraseBatch(base, cellCoordsList, skipUndo)
+function painter.eraseBatch(base, cellCoordsList, skipUndo, skipRebuild)
     local key = baseKey(base)
 
     if not paintedCells[key] then return end
@@ -190,7 +193,9 @@ function painter.eraseBatch(base, cellCoordsList, skipUndo)
         paintedCells[key] = nil
     end
 
-    painter.rebuild(base)
+    if not skipRebuild then
+        painter.rebuild(base)
+    end
 end
 
 function painter.popUndo()
