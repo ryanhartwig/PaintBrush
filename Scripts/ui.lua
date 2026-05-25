@@ -731,6 +731,7 @@ function ui.invalidateCache()
     -- Just nil out Lua references. Don't touch UObjects — they may already be destroyed
     -- during world teardown. UE will GC the widget tree on its own.
     textures.invalidate()
+    classes = {}  -- force re-lookup of UMG classes on next build
     rootWidget = nil
     buttonActions = {}
     categoryButtons = {}
