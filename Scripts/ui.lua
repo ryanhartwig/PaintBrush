@@ -740,6 +740,9 @@ function ui.invalidateCache()
         modalBlocker = nil
     end
     textures.invalidate()
+    if rootWidget then
+        pcall(function() rootWidget:RemoveFromViewport() end)
+    end
     classes = {}
     rootWidget = nil
     buttonActions = {}

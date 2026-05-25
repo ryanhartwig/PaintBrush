@@ -24,8 +24,9 @@ local MSG_PAINT = "PB_PAINT|"
 local MSG_ERASE = "PB_ERASE|"
 local MSG_REQ   = "PB_REQ"
 local MSG_STATE = "PB_STATE|"
-local MSG_RELAY_PAINT = "PB_RP|"  -- relayed paint action (small, incremental)
-local MSG_RELAY_ERASE = "PB_RE|"  -- relayed erase action (small, incremental)
+local MSG_RELAY_PAINT = "PB_RP|"  -- relayed paint action (real-time, incremental on client)
+local MSG_RELAY_ERASE = "PB_RE|"  -- relayed erase action (real-time, incremental on client)
+local MSG_JOIN_PAINT  = "PB_JP|"  -- join-sync paint chunk (bulk, deferred rebuild on client)
 
 -- Callback set by main.lua: called when remote state arrives so visuals can update
 local onStateReceived = nil
@@ -271,7 +272,7 @@ local function sendStateTo(senderPC)
             for _, coords in ipairs(cells) do
                 table.insert(chunk, coords)
                 if #chunk >= 50 then
-                    local msg = MSG_RELAY_PAINT .. guid .. "|" .. encodeCells(chunk) .. "|" .. matPath
+                    local msg = MSG_JOIN_PAINT .. guid .. "|" .. encodeCells(chunk) .. "|" .. matPath
                     pcall(function()
                         senderPC:ClientMessage(msg, FName("Event"), 10.0)
                     end)
@@ -384,11 +385,9 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         return
     end
 
-    -- Relayed paint action (from host, or join-sync chunks)
-    -- Uses skipRebuild + scheduleRebuild to handle bulk join-sync gracefully
-    -- (join-sync sends ~90 chunks of 50 cells — can't do 90 ForceFullBaseUpdates)
-    if raw:sub(1, #MSG_RELAY_PAINT) == MSG_RELAY_PAINT then
-        local payload = raw:sub(#MSG_RELAY_PAINT + 1)
+    -- Join-sync paint chunks (bulk, from sendStateTo — deferred rebuild)
+    if raw:sub(1, #MSG_JOIN_PAINT) == MSG_JOIN_PAINT then
+        local payload = raw:sub(#MSG_JOIN_PAINT + 1)
         local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
         if guid and cellsStr and matPath then
             local base = getBaseByGuid(guid)
@@ -401,15 +400,27 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         return
     end
 
-    -- Relayed erase action
+    -- Real-time relayed paint (incremental — no Empty, no crash)
+    if raw:sub(1, #MSG_RELAY_PAINT) == MSG_RELAY_PAINT then
+        local payload = raw:sub(#MSG_RELAY_PAINT + 1)
+        local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
+        if guid and cellsStr and matPath then
+            local base = getBaseByGuid(guid)
+            if base then
+                painter.applyBatch(base, decodeCells(cellsStr), matPath, true, false)
+            end
+        end
+        return
+    end
+
+    -- Real-time relayed erase (incremental)
     if raw:sub(1, #MSG_RELAY_ERASE) == MSG_RELAY_ERASE then
         local payload = raw:sub(#MSG_RELAY_ERASE + 1)
         local guid, cellsStr = payload:match("^([^|]+)|(.+)$")
         if guid and cellsStr then
             local base = getBaseByGuid(guid)
             if base then
-                painter.eraseBatch(base, decodeCells(cellsStr), true, true)
-                painter.scheduleRebuild()
+                painter.eraseBatch(base, decodeCells(cellsStr), true, false)
             end
         end
         return
