@@ -741,7 +741,11 @@ function ui.invalidateCache()
     end
     textures.invalidate()
     if rootWidget then
-        pcall(function() rootWidget:RemoveFromViewport() end)
+        pcall(function()
+            if rootWidget:IsValid() then
+                rootWidget:RemoveFromViewport()
+            end
+        end)
     end
     classes = {}
     rootWidget = nil

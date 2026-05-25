@@ -99,9 +99,19 @@ RegisterLoadMapPostHook(function(engine, world)
                 end
             end)
 
+            -- Host: same save slot means same world (client join/rejoin)
             if _stateLoaded and currentSlot == _lastLoadedSlot and currentSlot ~= nil then
-                -- Same world, just a client join/rejoin — don't reset host state
                 print("[PaintBrush] Map load hook (same world, skipping reset)\n")
+                _worldReady = true
+                return
+            end
+
+            -- Client: no save slot available, but if state is already loaded,
+            -- keep it and just re-request (second/third map loads from same join)
+            if _stateLoaded and not currentSlot and not isHost() then
+                print("[PaintBrush] Map load hook (client, keeping state, re-requesting)\n")
+                _worldReady = true
+                sync.requestState()
                 return
             end
 

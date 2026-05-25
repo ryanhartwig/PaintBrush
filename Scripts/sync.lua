@@ -106,25 +106,31 @@ end)
 local _localPCName = nil
 
 -- Cached base GUID lookup (avoids 9ms FindAllOf per remote paint)
-local _guidToBase = nil
+-- Rescans on cache miss (base may have streamed in since last scan)
+local _guidToBase = {}
 
-local function getBaseByGuid(guid)
-    if not _guidToBase then
-        _guidToBase = {}
-        local bases = FindAllOf("UWESculpturalBaseActor")
-        if bases then
-            for _, base in ipairs(bases) do
-                if base:IsValid() then
-                    local g = nil
-                    pcall(function()
-                        local bg = base.BaseNetworkGUID
-                        g = string.format("%08X%08X%08X%08X", bg.A, bg.B, bg.C, bg.D)
-                    end)
-                    if g then _guidToBase[g] = base end
-                end
+local function scanBases()
+    _guidToBase = {}
+    local bases = FindAllOf("UWESculpturalBaseActor")
+    if bases then
+        for _, base in ipairs(bases) do
+            if base:IsValid() then
+                local g = nil
+                pcall(function()
+                    local bg = base.BaseNetworkGUID
+                    g = string.format("%08X%08X%08X%08X", bg.A, bg.B, bg.C, bg.D)
+                end)
+                if g then _guidToBase[g] = base end
             end
         end
     end
+end
+
+local function getBaseByGuid(guid)
+    local base = _guidToBase[guid]
+    if base then return base end
+    -- Cache miss: rescan (base may have streamed in since last scan)
+    scanBases()
     return _guidToBase[guid]
 end
 
@@ -133,7 +139,7 @@ function sync.invalidateCache()
     -- Don't reset _isSoloHost — safe default is false (send RPCs).
     -- relayToOthers will self-correct to true if nobody is connected.
     _localPCName = nil
-    _guidToBase = nil
+    _guidToBase = {}
     painter.cancelScheduledRebuilds()
 end
 
