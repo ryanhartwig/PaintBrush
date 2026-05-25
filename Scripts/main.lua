@@ -293,9 +293,8 @@ RegisterKeyBind(Key[config.UndoKey], function()
             end
         end
 
-        -- Apply undo (hashmap only, visual update via scheduleRebuild)
-        painter.undo(true)
-        painter.scheduleRebuild()
+        -- Apply undo with incremental visual update (no Empty/rebuild)
+        painter.undo()
 
         -- Send reverse operations to other players
         if base and base:IsValid() then

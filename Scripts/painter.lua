@@ -359,6 +359,13 @@ function painter.undo(skipRebuild)
     end
     local baseData = paintedCells[key]
 
+    -- Capture current materials BEFORE restoring (needed for incremental)
+    local currentMaterials = {}
+    for _, prev in ipairs(action.batch or {}) do
+        currentMaterials[prev.cellKey] = baseData.cells[prev.cellKey]
+    end
+
+    -- Restore hashmap to previous state
     for _, prev in ipairs(action.batch or {}) do
         if prev.previousMaterial then
             baseData.cells[prev.cellKey] = prev.previousMaterial
@@ -375,8 +382,54 @@ function painter.undo(skipRebuild)
         _matToIndex[key] = nil
     end
 
+    -- Apply visuals incrementally (no Empty, no full rebuild)
     if not skipRebuild and base:IsValid() then
-        painter.rebuild(base)
+        local didIncremental = false
+        if _matToIndex[key] then
+            local arr
+            local ok = pcall(function() arr = base.MaterialOverrides.Overrides end)
+            if ok and arr then
+                local ok2 = pcall(function()
+                    for _, prev in ipairs(action.batch or {}) do
+                        local coords = parseCellKey(prev.cellKey)
+                        -- Remove from current material entry
+                        local curMat = currentMaterials[prev.cellKey]
+                        if curMat then
+                            local curIdx = _matToIndex[key][curMat]
+                            if curIdx then
+                                arr[curIdx].Cells:Remove({X=coords.X, Y=coords.Y, Z=coords.Z})
+                            end
+                        end
+                        -- Add to previous material entry (if restoring, not erasing)
+                        if prev.previousMaterial then
+                            local prevIdx = _matToIndex[key][prev.previousMaterial]
+                            if prevIdx then
+                                arr[prevIdx].Cells:Add({X=coords.X, Y=coords.Y, Z=coords.Z})
+                            else
+                                -- Previous material has no entry yet — need to grow array
+                                local matObj = StaticFindObject(prev.previousMaterial)
+                                if matObj and matObj:IsValid() then
+                                    local newIdx = #arr + 1
+                                    arr[newIdx] = {}
+                                    local entry = arr[newIdx]
+                                    entry.Hide = false
+                                    entry.Material = matObj
+                                    entry.Cells = {{X=coords.X, Y=coords.Y, Z=coords.Z}}
+                                    _matToIndex[key][prev.previousMaterial] = newIdx
+                                end
+                            end
+                        end
+                    end
+                end)
+                if ok2 then
+                    pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
+                    didIncremental = true
+                end
+            end
+        end
+        if not didIncremental then
+            painter.rebuild(base)
+        end
     end
     return true
 end
