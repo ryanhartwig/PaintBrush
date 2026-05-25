@@ -77,19 +77,37 @@ end
 -- Sending (any player → host)
 --------------------------------------------------------------------------------
 
+-- Check if other players are connected (skip network in singleplayer)
+local function hasOtherPlayers()
+    local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
+    if not targets then return false end
+    return #targets > 1  -- more than just us
+end
+
 function sync.sendPaint(base, cellCoordsList, materialPath)
+    local tSend0 = os.clock()
+    if not hasOtherPlayers() then
+        print(string.format("[PaintBrush] sendPaint: no other players, skipped (%.1fms)\n", (os.clock()-tSend0)*1000))
+        return
+    end
+    local tCheck = os.clock()
     local guid = guidString(base)
     if not guid then return end
     local msg = MSG_PAINT .. guid .. "|" .. encodeCells(cellCoordsList) .. "|" .. materialPath
+    local tBuild = os.clock()
     pcall(function()
         local pc = UEHelpers:GetPlayerController()
         if pc and pc:IsValid() then
             pc:ServerExecRPC(msg)
         end
     end)
+    local tRPC = os.clock()
+    print(string.format("[PaintBrush] sendPaint perf: playerChk=%.1fms build=%.1fms RPC=%.1fms TOTAL=%.1fms\n",
+        (tCheck-tSend0)*1000, (tBuild-tCheck)*1000, (tRPC-tBuild)*1000, (tRPC-tSend0)*1000))
 end
 
 function sync.sendErase(base, cellCoordsList)
+    if not hasOtherPlayers() then return end
     local guid = guidString(base)
     if not guid then return end
     local msg = MSG_ERASE .. guid .. "|" .. encodeCells(cellCoordsList)
@@ -288,8 +306,10 @@ end
 
 -- HOST: handle incoming paint/erase/request messages from any player
 RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgParam)
+    local tHook0 = os.clock()
     local ok, raw = pcall(function() return msgParam:get():ToString() end)
     if not ok or not raw or raw:sub(1, 3) ~= PREFIX then return end
+    local tParse = os.clock()
 
     -- Check if sender is local player (already applied locally, skip duplicate)
     local isLocal = false
@@ -300,20 +320,29 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             isLocal = (senderPC:GetFullName() == localPC:GetFullName())
         end
     end)
+    local tLocal = os.clock()
 
     if raw:sub(1, #MSG_PAINT) == MSG_PAINT then
         local payload = raw:sub(#MSG_PAINT + 1)
         local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
         if guid and cellsStr and matPath then
+            local tApply = os.clock()
             if not isLocal then
                 local base = findBaseByGuid(guid)
                 if base then
                     painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
                 end
+                state.save()
             end
-            state.save()
-            -- Relay the small action to other clients (not full state)
+            local tSave = os.clock()
             relayToOthers(MSG_RELAY_PAINT .. guid .. "|" .. cellsStr .. "|" .. matPath)
+            local tRelay = os.clock()
+            print(string.format(
+                "[PaintBrush] HOOK perf: isLocal=%s | parse=%.1fms localChk=%.1fms apply+save=%.1fms relay=%.1fms TOTAL=%.1fms\n",
+                tostring(isLocal),
+                (tParse - tHook0)*1000, (tLocal - tParse)*1000,
+                (tSave - tApply)*1000, (tRelay - tSave)*1000,
+                (tRelay - tHook0)*1000))
         end
 
     elseif raw:sub(1, #MSG_ERASE) == MSG_ERASE then
@@ -325,8 +354,8 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
                 if base then
                     painter.eraseBatch(base, decodeCells(cellsStr), true)
                 end
+                state.save()
             end
-            state.save()
             relayToOthers(MSG_RELAY_ERASE .. guid .. "|" .. cellsStr)
         end
 

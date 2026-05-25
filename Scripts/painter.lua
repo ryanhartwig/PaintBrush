@@ -22,23 +22,26 @@ end
 
 -- Rebuild MaterialOverrides on a base from current paintedCells state
 function painter.rebuild(base)
+    local t0 = os.clock()
+
     local arr = base.MaterialOverrides.Overrides
+    local tAccess = os.clock()
 
     if #arr > 0 then
         pcall(function() arr:Empty() end)
     end
+    local tEmpty = os.clock()
 
     local key = baseKey(base)
     local baseData = paintedCells[key]
 
-    -- Count cells
     local cellCount = 0
     if baseData then
         for _ in pairs(baseData.cells) do cellCount = cellCount + 1 end
     end
 
     if not baseData or cellCount == 0 then
-        pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
+        print(string.format("[PaintBrush] perf: 0 cells, abort (%.1fms)\n", (os.clock() - t0) * 1000))
         return
     end
 
@@ -52,12 +55,15 @@ function painter.rebuild(base)
         end
         table.insert(groups[matPath], parseCellKey(ck))
     end
+    local tGroup = os.clock()
 
-    -- Create one override entry per unique material
+    -- Create override entries
+    local totalCellsWritten = 0
+    local matsMissing = 0
     for idx, matPath in ipairs(order) do
         local matObj = StaticFindObject(matPath)
         if not matObj or not matObj:IsValid() then
-            print(string.format("[PaintBrush] painter.rebuild: material not found: %s\n", matPath))
+            matsMissing = matsMissing + 1
         else
             local cells = groups[matPath]
             pcall(function() arr[idx] = {} end)
@@ -71,10 +77,24 @@ function painter.rebuild(base)
                 local coord = cells[ci]
                 pcall(function() entry.Cells:Add({X = coord.X, Y = coord.Y, Z = coord.Z}) end)
             end
+            totalCellsWritten = totalCellsWritten + #cells
         end
     end
+    local tWrite = os.clock()
 
     pcall(function() base:ForceFullBaseUpdate(false, false, true) end)
+    local tUpdate = os.clock()
+
+    print(string.format(
+        "[PaintBrush] perf: %d cells, %d mats (%d missing) | "
+        .. "access=%.1fms empty=%.1fms group=%.1fms write=%.1fms update=%.1fms TOTAL=%.1fms\n",
+        cellCount, #order, matsMissing,
+        (tAccess - t0) * 1000,
+        (tEmpty - tAccess) * 1000,
+        (tGroup - tEmpty) * 1000,
+        (tWrite - tGroup) * 1000,
+        (tUpdate - tWrite) * 1000,
+        (tUpdate - t0) * 1000))
 end
 
 function painter.apply(base, cellCoords, materialPath)
@@ -83,6 +103,7 @@ end
 
 -- skipUndo: true when applying remote actions (don't pollute local undo stack)
 function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo)
+    local tBatch0 = os.clock()
     local key = baseKey(base)
 
     if not paintedCells[key] then
@@ -111,11 +132,18 @@ function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo)
     end
 
     -- Upsert all cells (O(1) per cell now!)
+    local tUpsert = os.clock()
     for _, coords in ipairs(cellCoordsList) do
         baseData.cells[cellKey(coords)] = materialPath
     end
+    local tUpsertDone = os.clock()
 
     painter.rebuild(base)
+    print(string.format("[PaintBrush] applyBatch perf: %d cells | undo=%.1fms upsert=%.1fms TOTAL=%.1fms (rebuild above)\n",
+        #cellCoordsList,
+        (tUpsert - tBatch0) * 1000,
+        (tUpsertDone - tUpsert) * 1000,
+        (os.clock() - tBatch0) * 1000))
 end
 
 function painter.eraseBatch(base, cellCoordsList, skipUndo)

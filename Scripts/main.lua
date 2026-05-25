@@ -102,6 +102,20 @@ local function getBrushRadius()
     return ui.getBrushRadius()
 end
 
+-- Debounced save: batches rapid paints, writes once after 2 seconds of inactivity
+local _saveTimer = nil
+local function debouncedSave()
+    if not config.AutoSave or not isHost() then return end
+    if _saveTimer then return end  -- timer already pending
+    _saveTimer = true
+    ExecuteWithDelay(2000, function()
+        ExecuteInGameThread(function()
+            _saveTimer = nil
+            state.save()
+        end)
+    end)
+end
+
 -- B = open material picker UI
 local pendingTarget = nil  -- stores detection info while UI is open
 
@@ -142,7 +156,7 @@ RegisterKeyBind(Key[config.PickerKey], function()
                 end
                 painter.applyBatch(pendingTarget.base, cells, matPath)
                 sync.sendPaint(pendingTarget.base, cells, matPath)
-                if config.AutoSave and isHost() then state.save() end
+                debouncedSave()
                 print(string.format("[PaintBrush] Applied %s (UI stays open)\n", matName))
             end
         end
@@ -183,24 +197,31 @@ RegisterKeyBind(Key[config.PaintKey], function()
 
         local size = (r * 2 + 1)
 
+        local tChain = os.clock()
+
         if ui.isEraserMode() then
-            painter.eraseBatch(info.base, cells)                -- local: instant + undo
-            sync.sendErase(info.base, cells)                    -- network: sync to others
-            print(string.format("[PaintBrush] Erased %dx%dx%d at (%d,%d,%d)\n",
-                size, size, size, cc.X, cc.Y, cc.Z))
+            painter.eraseBatch(info.base, cells)
+            local tPaint = os.clock()
+            sync.sendErase(info.base, cells)
+            local tSync = os.clock()
+            debouncedSave()
+            local tSave = os.clock()
+            print(string.format("[PaintBrush] CHAIN perf: erase | paint=%.1fms sync=%.1fms save=%.1fms TOTAL=%.1fms\n",
+                (tPaint - tChain)*1000, (tSync - tPaint)*1000, (tSave - tSync)*1000, (tSave - tChain)*1000))
         else
             local matPath, matName = getSelectedMaterial()
             if not matPath then
                 print("[PaintBrush] No material selected\n")
                 return
             end
-            painter.applyBatch(info.base, cells, matPath)       -- local: instant + undo
-            sync.sendPaint(info.base, cells, matPath)            -- network: sync to others
-            print(string.format("[PaintBrush] Painted %dx%dx%d at (%d,%d,%d) with %s\n",
-                size, size, size, cc.X, cc.Y, cc.Z, matName))
-        end
-        if config.AutoSave and isHost() then
-            state.save()
+            painter.applyBatch(info.base, cells, matPath)
+            local tPaint = os.clock()
+            sync.sendPaint(info.base, cells, matPath)
+            local tSync = os.clock()
+            debouncedSave()
+            local tSave = os.clock()
+            print(string.format("[PaintBrush] CHAIN perf: paint %s | paint=%.1fms sync=%.1fms save=%.1fms TOTAL=%.1fms\n",
+                matName, (tPaint - tChain)*1000, (tSync - tPaint)*1000, (tSave - tSync)*1000, (tSave - tChain)*1000))
         end
     end)
 end)
@@ -245,7 +266,7 @@ RegisterKeyBind(Key[config.UndoKey], function()
             end
         end
 
-        if config.AutoSave and isHost() then state.save() end
+        debouncedSave()
         print("[PaintBrush] Undo successful\n")
     end)
 end)
