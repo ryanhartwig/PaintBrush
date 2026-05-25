@@ -64,7 +64,8 @@ local function makeText(outer, str, opts)
     local opacity = opts.opacity or 0.6
     if gameFont then
         pcall(function()
-            local f = gameFont
+            local f = {}
+            for k, v in pairs(gameFont) do f[k] = v end
             f.Size = size
             tb:SetFont(f)
         end)
@@ -218,9 +219,13 @@ local eraserButton = nil
 
 local favourites = {}  -- set: { [materialPath] = true }
 
+local _favDirCreated = false
 local function getFavouritesPath()
     local dataDir = config.ModDir .. "../../PaintBrush/"
-    os.execute('mkdir "' .. dataDir:gsub("/", "\\") .. '" 2>nul')
+    if not _favDirCreated then
+        os.execute('mkdir "' .. dataDir:gsub("/", "\\") .. '" 2>nul')
+        _favDirCreated = true
+    end
     return dataDir .. "favourites.txt"
 end
 
@@ -728,10 +733,16 @@ end
 
 -- Invalidate cached UI (call on map load / world change)
 function ui.invalidateCache()
-    -- Just nil out Lua references. Don't touch UObjects — they may already be destroyed
-    -- during world teardown. UE will GC the widget tree on its own.
+    -- Pop modal blocker if UI was open during world change
+    if modalBlocker then
+        pcall(function()
+            local wm = FindFirstOf("WindowManager")
+            if wm then wm:Pop(modalBlocker) end
+        end)
+        modalBlocker = nil
+    end
     textures.invalidate()
-    classes = {}  -- force re-lookup of UMG classes on next build
+    classes = {}
     rootWidget = nil
     buttonActions = {}
     categoryButtons = {}

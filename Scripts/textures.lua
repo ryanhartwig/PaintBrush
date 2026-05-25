@@ -74,6 +74,9 @@ function textures.get(name)
 end
 
 function textures.invalidate()
+    if anchor then
+        pcall(function() anchor:RemoveFromViewport() end)
+    end
     cache = {}
     anchor = nil
 end

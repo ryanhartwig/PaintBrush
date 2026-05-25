@@ -3,19 +3,6 @@ local materials = {}
 -- Internal cache: array of { name, path, ref, category }, sorted by category then name.
 local cache = nil
 
--- Curated default favorites (confirmed paths from probing).
-local DEFAULTS = {
-    "/Game/Art/Bases/Materials/MI_Base_Floor.MI_Base_Floor",
-    "/Game/Art/Bases/Materials/MI_BaseBuilding_Glass.MI_BaseBuilding_Glass",
-    "/Game/Materials/BaseBuilding/Bases/MI_BaseBuilding_PoweredEmissive.MI_BaseBuilding_PoweredEmissive",
-    "/Game/Materials/BaseBuilding/Bases/MI_BaseBuilding_PoweredEmissive_Strip.MI_BaseBuilding_PoweredEmissive_Strip",
-    "/Game/Materials/BaseBuilding/Bases/MI_BaseBuilding_PoweredEmissive_OverheadLights.MI_BaseBuilding_PoweredEmissive_OverheadLights",
-    "/Game/Art/Environment/Set/Alterra/Materials/MI_Alterra_Trimsheet.MI_Alterra_Trimsheet",
-    "/Game/Art/Environment/Set/Alterra/Materials/MI_Alterra_Trimsheet_Fixed_Grunge.MI_Alterra_Trimsheet_Fixed_Grunge",
-    "/Game/Materials/BaseBuilding/MI_HatchMembrane.MI_HatchMembrane",
-    "/Game/Art/Bases/Materials/MI_PlanterSoil_01a.MI_PlanterSoil_01a",
-}
-
 -- Derive a display category from asset path and short name.
 function materials.categorize(path, name)
     if path:find("/Art/Bases/Materials/")                   then return "Base Building"  end
@@ -243,10 +230,6 @@ end
 
 function materials.getCuratedSubcategories()
     return {"Basic Building", "Colors", "Dynamic", "Emissives", "Glass", "Glossy"}
-end
-
-function materials.getDefaults()
-    return DEFAULTS
 end
 
 return materials

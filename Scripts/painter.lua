@@ -19,6 +19,7 @@ local function parseCellKey(key)
     local x, y, z = key:match("^(-?%d+),(-?%d+),(-?%d+)$")
     return {X = tonumber(x), Y = tonumber(y), Z = tonumber(z)}
 end
+painter.parseCellKey = parseCellKey
 
 -- Rebuild MaterialOverrides on a base from current paintedCells state
 function painter.rebuild(base)
@@ -68,17 +69,16 @@ function painter.rebuild(base)
             matsMissing = matsMissing + 1
         else
             local cells = groups[matPath]
-            pcall(function() arr[idx] = {} end)
-            local entry = arr[idx]
-            pcall(function() entry.Hide = false end)
-            pcall(function() entry.Material = matObj end)
-
-            local first = cells[1]
-            pcall(function() entry.Cells = {{X = first.X, Y = first.Y, Z = first.Z}} end)
-            for ci = 2, #cells do
-                local coord = cells[ci]
-                pcall(function() entry.Cells:Add({X = coord.X, Y = coord.Y, Z = coord.Z}) end)
-            end
+            pcall(function()
+                arr[idx] = {}
+                local entry = arr[idx]
+                entry.Hide = false
+                entry.Material = matObj
+                entry.Cells = {{X = cells[1].X, Y = cells[1].Y, Z = cells[1].Z}}
+                for ci = 2, #cells do
+                    entry.Cells:Add({X = cells[ci].X, Y = cells[ci].Y, Z = cells[ci].Z})
+                end
+            end)
             totalCellsWritten = totalCellsWritten + #cells
         end
     end

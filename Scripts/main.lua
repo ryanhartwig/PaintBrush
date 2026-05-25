@@ -9,10 +9,7 @@ local sync      = require("sync")
 
 local _stateLoaded = false
 
-local function parseCellKey(key)
-    local x, y, z = key:match("^(-?%d+),(-?%d+),(-?%d+)$")
-    return {X = tonumber(x), Y = tonumber(y), Z = tonumber(z)}
-end
+local parseCellKey = painter.parseCellKey
 
 -- Cached host detection (reset on map load)
 local _isHostCached = nil
@@ -44,6 +41,7 @@ local function refreshModSettings()
 end
 
 local function ensureStateLoaded()
+    if not _worldReady and _stateLoaded then return end  -- transitioning, don't re-init
     if _stateLoaded then return end
     reloadMaterials()
     refreshModSettings()
@@ -60,11 +58,13 @@ end
 -- Debounce state (must be before RegisterLoadMapPostHook)
 local _saveTimer = nil
 local _saveGeneration = 0
+local _worldReady = false  -- false during map load transition, prevents undo on stale refs
 
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 local _lastLoadedSlot = nil
 
 RegisterLoadMapPostHook(function(engine, world)
+    _worldReady = false  -- block undo/paint during transition
     -- Flush any pending save NOW before state gets wiped
     if _saveTimer and _isHostCached then
         pcall(state.save)
@@ -105,6 +105,7 @@ RegisterLoadMapPostHook(function(engine, world)
                 print("[PaintBrush] Waiting for state from host (client)\n")
             end
             _stateLoaded = true
+            _worldReady = true
             -- Request state from host. Retry at 8s and 16s only if no state received yet.
             local function requestIfEmpty()
                 local cells = painter.getPaintedCells()

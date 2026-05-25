@@ -61,17 +61,6 @@ local function decodeCells(str)
     return cells
 end
 
--- Find a base actor by its GUID string
-local function findBaseByGuid(guidStr)
-    local bases = FindAllOf("UWESculpturalBaseActor")
-    if not bases then return nil end
-    for _, base in ipairs(bases) do
-        if base:IsValid() and guidString(base) == guidStr then
-            return base
-        end
-    end
-    return nil
-end
 
 --------------------------------------------------------------------------------
 -- Sending (any player → host)
@@ -106,9 +95,38 @@ pcall(function()
     end)
 end)
 
+-- Cached local PC name for isLocal checks (avoids 9ms GetFullName x2 per hook)
+local _localPCName = nil
+
+-- Cached base GUID lookup (avoids 9ms FindAllOf per remote paint)
+local _guidToBase = nil
+
+local function getBaseByGuid(guid)
+    if not _guidToBase then
+        _guidToBase = {}
+        local bases = FindAllOf("UWESculpturalBaseActor")
+        if bases then
+            for _, base in ipairs(bases) do
+                if base:IsValid() then
+                    local g = nil
+                    pcall(function()
+                        local bg = base.BaseNetworkGUID
+                        g = string.format("%08X%08X%08X%08X", bg.A, bg.B, bg.C, bg.D)
+                    end)
+                    if g then _guidToBase[g] = base end
+                end
+            end
+        end
+    end
+    return _guidToBase[guid]
+end
+
 function sync.invalidateCache()
     _isHostKnown = false
     _isSoloHost = true
+    _localPCName = nil
+    _guidToBase = nil
+    _deferredRebuildScheduled = false
 end
 
 function sync.sendPaint(base, cellCoordsList, materialPath)
@@ -144,40 +162,6 @@ function sync.sendErase(base, cellCoordsList)
             pc:ServerExecRPC(msg)
         end
     end)
-end
-
--- Undo: pop from local stack, send reverse operations to host
-function sync.sendUndo()
-    local entry = painter.popUndo()
-    if not entry then return false end
-    if not entry.base or not entry.base:IsValid() then return false end
-
-    -- Group cells by action: erase (previousMaterial=nil) or paint-with-previous
-    local eraseCells = {}
-    local paintGroups = {}  -- { [materialPath] = {cells} }
-
-    for _, prev in ipairs(entry.batch or {}) do
-        if prev.previousMaterial then
-            if not paintGroups[prev.previousMaterial] then
-                paintGroups[prev.previousMaterial] = {}
-            end
-            table.insert(paintGroups[prev.previousMaterial], prev.cellCoords)
-        else
-            table.insert(eraseCells, prev.cellCoords)
-        end
-    end
-
-    -- Send erase for cells that were unpainted before
-    if #eraseCells > 0 then
-        sync.sendErase(entry.base, eraseCells)
-    end
-
-    -- Send paint-with-previous for cells that had a different material
-    for matPath, cells in pairs(paintGroups) do
-        sync.sendPaint(entry.base, cells, matPath)
-    end
-
-    return true
 end
 
 function sync.requestState()
@@ -339,13 +323,16 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
     if not ok or not raw or raw:sub(1, 3) ~= PREFIX then return end
     local tParse = os.clock()
 
-    -- Check if sender is local player (already applied locally, skip duplicate)
+    -- Check if sender is local player (cached local PC name)
     local isLocal = false
     pcall(function()
+        if not _localPCName then
+            local localPC = UEHelpers:GetPlayerController()
+            if localPC then _localPCName = localPC:GetFullName() end
+        end
         local senderPC = ctx:get()
-        local localPC = UEHelpers:GetPlayerController()
-        if senderPC and localPC then
-            isLocal = (senderPC:GetFullName() == localPC:GetFullName())
+        if senderPC and _localPCName then
+            isLocal = (senderPC:GetFullName() == _localPCName)
         end
     end)
     local tLocal = os.clock()
@@ -356,7 +343,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
         if guid and cellsStr and matPath then
             local tApply = os.clock()
             if not isLocal then
-                local base = findBaseByGuid(guid)
+                local base = getBaseByGuid(guid)
                 if base then
                     painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
                 end
@@ -378,7 +365,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
         local guid, cellsStr = payload:match("^([^|]+)|(.+)$")
         if guid and cellsStr then
             if not isLocal then
-                local base = findBaseByGuid(guid)
+                local base = getBaseByGuid(guid)
                 if base then
                     painter.eraseBatch(base, decodeCells(cellsStr), true)
                 end
@@ -431,7 +418,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         local payload = raw:sub(#MSG_RELAY_PAINT + 1)
         local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
         if guid and cellsStr and matPath then
-            local base = findBaseByGuid(guid)
+            local base = getBaseByGuid(guid)
             if base then
                 painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
                 -- Schedule a deferred rebuild to catch late-streaming materials
@@ -460,7 +447,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         local payload = raw:sub(#MSG_RELAY_ERASE + 1)
         local guid, cellsStr = payload:match("^([^|]+)|(.+)$")
         if guid and cellsStr then
-            local base = findBaseByGuid(guid)
+            local base = getBaseByGuid(guid)
             if base then
                 painter.eraseBatch(base, decodeCells(cellsStr), true)
                 print("[PaintBrush] sync: relayed erase\n")
@@ -470,10 +457,6 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
     end
 end)
 
--- Broadcast current state (called after local undo to override stale broadcasts)
-function sync.broadcastCurrentState()
-    broadcastState()
-end
 
 print("[PaintBrush] sync: multiplayer hooks registered\n")
 
