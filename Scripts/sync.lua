@@ -218,8 +218,9 @@ local function broadcastState()
             end
         end)
     end
-    if sent > 0 then
-        print(string.format("[PaintBrush] sync: broadcast to %d client(s), msg size=%d\n", sent, #msg))
+    -- If no one to send to, we're solo again
+    if sent == 0 and _isHostKnown then
+        _isSoloHost = true
     end
 end
 
