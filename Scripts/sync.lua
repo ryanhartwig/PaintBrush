@@ -14,6 +14,8 @@ local MSG_PAINT = "PB_PAINT|"
 local MSG_ERASE = "PB_ERASE|"
 local MSG_REQ   = "PB_REQ"
 local MSG_STATE = "PB_STATE|"
+local MSG_RELAY_PAINT = "PB_RP|"  -- relayed paint action (small, incremental)
+local MSG_RELAY_ERASE = "PB_RE|"  -- relayed erase action (small, incremental)
 
 -- Callback set by main.lua: called when remote state arrives so visuals can update
 local onStateReceived = nil
@@ -146,29 +148,105 @@ local function broadcastState()
     if not jsonStr then return end
     local msg = MSG_STATE .. jsonStr
 
-    -- Get local PC to skip self (host already applied locally)
-    local localPC = nil
-    pcall(function() localPC = UEHelpers:GetPlayerController() end)
+    -- Get local PC name to skip self (host already applied locally)
+    local localPCName = nil
+    pcall(function() localPCName = UEHelpers:GetPlayerController():GetFullName() end)
+
+    local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
+    if not targets then return end
+    local sent = 0
+    for _, pc in ipairs(targets) do
+        pcall(function()
+            if pc:IsValid()
+               and not pc:HasAnyFlags(EObjectFlags.RF_ClassDefaultObject) then
+                local pcName = pc:GetFullName()
+                if pcName ~= localPCName then
+                    pc:ClientMessage(msg, FName("Event"), 10.0)
+                    sent = sent + 1
+                end
+            end
+        end)
+    end
+    if sent > 0 then
+        print(string.format("[PaintBrush] sync: broadcast to %d client(s), msg size=%d\n", sent, #msg))
+    end
+end
+
+-- Relay a small action message to all non-self clients (instead of full state)
+local function relayToOthers(msg)
+    local localPCName = nil
+    pcall(function() localPCName = UEHelpers:GetPlayerController():GetFullName() end)
 
     local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
     if not targets then return end
     for _, pc in ipairs(targets) do
         pcall(function()
             if pc:IsValid()
-               and not pc:HasAnyFlags(EObjectFlags.RF_ClassDefaultObject)
-               and pc ~= localPC then
-                pc:ClientMessage(msg, FName("Event"), 10.0)
+               and not pc:HasAnyFlags(EObjectFlags.RF_ClassDefaultObject) then
+                local pcName = pc:GetFullName()
+                if pcName ~= localPCName then
+                    pc:ClientMessage(msg, FName("Event"), 10.0)
+                end
             end
         end)
     end
 end
 
+local MAX_MSG_SIZE = 16000  -- safe limit for ClientMessage string
+
 local function sendStateTo(senderPC)
-    local jsonStr = state.serializeCurrentState()
-    if not jsonStr then return end
-    pcall(function()
-        senderPC:ClientMessage(MSG_STATE .. jsonStr, FName("Event"), 10.0)
-    end)
+    -- Instead of sending full JSON (can be 300KB+), send individual paint actions
+    -- This is slower but guarantees delivery
+    local paintedCells = painter.getPaintedCells()
+    local totalSent = 0
+
+    for _, baseData in pairs(paintedCells) do
+        local base = baseData.base
+        if not base or not base:IsValid() then goto nextBase end
+        local guid = nil
+        pcall(function()
+            local g = base.BaseNetworkGUID
+            guid = string.format("%08X%08X%08X%08X", g.A, g.B, g.C, g.D)
+        end)
+        if not guid then goto nextBase end
+
+        -- Batch cells by material, then send each batch
+        local byMat = {}
+        for _, c in ipairs(baseData.cells) do
+            if not byMat[c.materialPath] then
+                byMat[c.materialPath] = {}
+            end
+            table.insert(byMat[c.materialPath], c.cellCoords)
+        end
+
+        for matPath, cells in pairs(byMat) do
+            -- Send in chunks to stay under message size limit
+            local chunk = {}
+            for _, coords in ipairs(cells) do
+                table.insert(chunk, coords)
+                -- Estimate message size: ~20 chars per cell + overhead
+                if #chunk >= 50 then
+                    local msg = MSG_RELAY_PAINT .. guid .. "|" .. encodeCells(chunk) .. "|" .. matPath
+                    pcall(function()
+                        senderPC:ClientMessage(msg, FName("Event"), 10.0)
+                    end)
+                    totalSent = totalSent + #chunk
+                    chunk = {}
+                end
+            end
+            if #chunk > 0 then
+                local msg = MSG_RELAY_PAINT .. guid .. "|" .. encodeCells(chunk) .. "|" .. matPath
+                pcall(function()
+                    senderPC:ClientMessage(msg, FName("Event"), 10.0)
+                end)
+                totalSent = totalSent + #chunk
+            end
+        end
+
+        ::nextBase::
+    end
+
+    print(string.format("[PaintBrush] sync: sent %d cells to joining client\n", totalSent))
 end
 
 --------------------------------------------------------------------------------
@@ -201,7 +279,8 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
                 end
             end
             state.save()
-            broadcastState()
+            -- Relay the small action to other clients (not full state)
+            relayToOthers(MSG_RELAY_PAINT .. guid .. "|" .. cellsStr .. "|" .. matPath)
         end
 
     elseif raw:sub(1, #MSG_ERASE) == MSG_ERASE then
@@ -215,31 +294,60 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
                 end
             end
             state.save()
-            broadcastState()
+            relayToOthers(MSG_RELAY_ERASE .. guid .. "|" .. cellsStr)
         end
 
     elseif raw == MSG_REQ then
         -- Send full state to the requester
         local senderPC = ctx:get()
         if senderPC and senderPC:IsValid() then
+            print("[PaintBrush] sync: PB_REQ received, sending state\n")
             sendStateTo(senderPC)
         end
     end
 end)
 
--- CLIENT: receive state broadcast from host
+-- CLIENT: receive messages from host
 RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam)
     local ok, raw = pcall(function() return sParam:get():ToString() end)
-    if not ok or not raw or raw:sub(1, #MSG_STATE) ~= MSG_STATE then return end
+    if not ok or not raw then return end
 
-    local jsonStr = raw:sub(#MSG_STATE + 1)
-    state.applyFromJson(jsonStr)
-
-    if onStateReceived then
-        onStateReceived()
+    -- Full state (for PB_REQ response / join sync)
+    if raw:sub(1, #MSG_STATE) == MSG_STATE then
+        local jsonStr = raw:sub(#MSG_STATE + 1)
+        state.applyFromJson(jsonStr)
+        if onStateReceived then onStateReceived() end
+        print("[PaintBrush] sync: received full state from host\n")
+        return
     end
 
-    print("[PaintBrush] sync: received state from host\n")
+    -- Relayed paint action (incremental, small message)
+    if raw:sub(1, #MSG_RELAY_PAINT) == MSG_RELAY_PAINT then
+        local payload = raw:sub(#MSG_RELAY_PAINT + 1)
+        local guid, cellsStr, matPath = payload:match("^([^|]+)|([^|]+)|(.+)$")
+        if guid and cellsStr and matPath then
+            local base = findBaseByGuid(guid)
+            if base then
+                painter.applyBatch(base, decodeCells(cellsStr), matPath)
+                print(string.format("[PaintBrush] sync: relayed paint %s\n", matPath:sub(-30)))
+            end
+        end
+        return
+    end
+
+    -- Relayed erase action
+    if raw:sub(1, #MSG_RELAY_ERASE) == MSG_RELAY_ERASE then
+        local payload = raw:sub(#MSG_RELAY_ERASE + 1)
+        local guid, cellsStr = payload:match("^([^|]+)|(.+)$")
+        if guid and cellsStr then
+            local base = findBaseByGuid(guid)
+            if base then
+                painter.eraseBatch(base, decodeCells(cellsStr))
+                print("[PaintBrush] sync: relayed erase\n")
+            end
+        end
+        return
+    end
 end)
 
 -- Broadcast current state (called after local undo to override stale broadcasts)
