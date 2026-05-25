@@ -303,11 +303,14 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
         end
 
     elseif raw == MSG_REQ then
+        -- Only the HOST should respond to PB_REQ.
+        -- Skip if sender is local player (we're a client processing our own request).
+        if isLocal then return end
+
         local senderPC = ctx:get()
         if senderPC and senderPC:IsValid() then
             if not hostStateReady then
                 print("[PaintBrush] sync: PB_REQ received but host state not loaded yet, deferring\n")
-                -- Defer: retry after state loads
                 ExecuteWithDelay(5000, function()
                     ExecuteInGameThread(function()
                         if senderPC:IsValid() then
