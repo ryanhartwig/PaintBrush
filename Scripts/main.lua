@@ -61,7 +61,13 @@ end
 local _lastLoadedSlot = nil
 
 RegisterLoadMapPostHook(function(engine, world)
+    -- Flush any pending save NOW before state gets wiped
+    if _saveTimer and _isHostCached then
+        pcall(state.save)
+    end
     _isHostCached = nil
+    _saveTimer = nil
+    _saveGeneration = _saveGeneration + 1  -- invalidate any pending debounced save
     sync.invalidateCache()
     pcall(ui.invalidateCache)
 
@@ -129,13 +135,18 @@ end
 
 -- Debounced save: batches rapid paints, writes once after 2 seconds of inactivity
 local _saveTimer = nil
+local _saveGeneration = 0  -- incremented on map load to invalidate pending timers
+
 local function debouncedSave()
     if not config.AutoSave or not isHost() then return end
-    if _saveTimer then return end  -- timer already pending
+    if _saveTimer then return end
     _saveTimer = true
+    local gen = _saveGeneration
     ExecuteWithDelay(2000, function()
         ExecuteInGameThread(function()
             _saveTimer = nil
+            -- Skip if a map load happened since this timer was scheduled
+            if gen ~= _saveGeneration then return end
             state.save()
         end)
     end)
