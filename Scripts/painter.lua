@@ -168,6 +168,11 @@ function painter.popUndo()
     return table.remove(undoStack, #undoStack)
 end
 
+function painter.peekUndo()
+    if #undoStack == 0 then return nil end
+    return undoStack[#undoStack]
+end
+
 function painter.undo()
     if #undoStack == 0 then
         return false

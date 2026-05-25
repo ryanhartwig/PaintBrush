@@ -9,6 +9,11 @@ local sync      = require("sync")
 
 local _stateLoaded = false
 
+local function parseCellKey(key)
+    local x, y, z = key:match("^(-?%d+),(-?%d+),(-?%d+)$")
+    return {X = tonumber(x), Y = tonumber(y), Z = tonumber(z)}
+end
+
 -- Material cycling — rebuilt after map load when materials are available
 local browseMats = {}
 local selectedIdx = 1
@@ -195,18 +200,48 @@ RegisterKeyBind(Key[config.PaintKey], function()
     end)
 end)
 
--- Z = undo (local apply + save, sync will reconcile on next broadcast)
+-- Z = undo (local apply + relay reverse operations to other players)
 RegisterKeyBind(Key[config.UndoKey], function()
     ExecuteInGameThread(function()
         ensureStateLoaded()
-        local undone = painter.undo()
-        if undone then
-            if config.AutoSave then state.save() end
-            sync.broadcastCurrentState()  -- override any stale sync broadcasts
-            print("[PaintBrush] Undo successful\n")
-        else
+        -- Peek at the undo entry to extract reverse operations BEFORE undoing
+        local entry = painter.peekUndo()
+        if not entry then
             print("[PaintBrush] Nothing to undo\n")
+            return
         end
+
+        -- Extract reverse operations from the undo entry
+        local base = entry.base
+        local eraseCells = {}
+        local paintGroups = {}  -- { [matPath] = {coords} }
+        for _, prev in ipairs(entry.batch or {}) do
+            local coords = parseCellKey(prev.cellKey)
+            if prev.previousMaterial then
+                if not paintGroups[prev.previousMaterial] then
+                    paintGroups[prev.previousMaterial] = {}
+                end
+                table.insert(paintGroups[prev.previousMaterial], coords)
+            else
+                table.insert(eraseCells, coords)
+            end
+        end
+
+        -- Apply undo locally
+        painter.undo()
+
+        -- Send reverse operations to other players via relay
+        if base and base:IsValid() then
+            if #eraseCells > 0 then
+                sync.sendErase(base, eraseCells)
+            end
+            for matPath, cells in pairs(paintGroups) do
+                sync.sendPaint(base, cells, matPath)
+            end
+        end
+
+        if config.AutoSave then state.save() end
+        print("[PaintBrush] Undo successful\n")
     end)
 end)
 
