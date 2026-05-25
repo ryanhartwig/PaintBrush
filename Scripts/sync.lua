@@ -77,32 +77,38 @@ end
 -- Sending (any player → host)
 --------------------------------------------------------------------------------
 
--- Cached solo host detection (reset on map load + when players join/leave)
-local _isSoloHostCached = nil
-local _soloHostCacheTime = 0
+-- Event-driven solo host detection (no polling)
+local _isSoloHost = true  -- assume solo until another player appears
+local _isHostKnown = false
 
-local function isSoloHost()
-    -- Re-check every 5 seconds (players can join/leave)
-    local now = os.clock()
-    if _isSoloHostCached ~= nil and (now - _soloHostCacheTime) < 5.0 then
-        return _isSoloHostCached
-    end
-    -- Clients always return false (they MUST send RPCs to the host)
+local function refreshSoloHost()
     local save = FindFirstOf("UWESaveGame")
     if not save or not save:IsValid() then
-        _isSoloHostCached = false
-        _soloHostCacheTime = now
-        return false
+        _isSoloHost = false  -- client, never solo
+        _isHostKnown = true
+        return
     end
     local targets = FindAllOf("SN2PlayerController") or FindAllOf("PlayerController")
-    _isSoloHostCached = (not targets or #targets <= 1)
-    _soloHostCacheTime = now
-    return _isSoloHostCached
+    _isSoloHost = (not targets or #targets <= 1)
+    _isHostKnown = true
 end
 
+local function isSoloHost()
+    if not _isHostKnown then refreshSoloHost() end
+    return _isSoloHost
+end
+
+-- Detect player join: invalidates solo status
+pcall(function()
+    NotifyOnNewObject("/Script/Subnautica2.SN2PlayerController", function(newPC)
+        _isSoloHost = false  -- another player joined, no longer solo
+        print("[PaintBrush] sync: player joined, solo=false\n")
+    end)
+end)
+
 function sync.invalidateCache()
-    _isSoloHostCached = nil
-    _soloHostCacheTime = 0
+    _isHostKnown = false
+    _isSoloHost = true
 end
 
 function sync.sendPaint(base, cellCoordsList, materialPath)
