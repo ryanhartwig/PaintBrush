@@ -8,6 +8,11 @@ local state     = require("state")
 local config    = require("config")
 
 local sync = {}
+local hostStateReady = false  -- set by main.lua after state.load() completes
+
+function sync.setHostReady()
+    hostStateReady = true
+end
 
 local PREFIX = "PB_"
 local MSG_PAINT = "PB_PAINT|"
@@ -298,11 +303,23 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
         end
 
     elseif raw == MSG_REQ then
-        -- Send full state to the requester
         local senderPC = ctx:get()
         if senderPC and senderPC:IsValid() then
-            print("[PaintBrush] sync: PB_REQ received, sending state\n")
-            sendStateTo(senderPC)
+            if not hostStateReady then
+                print("[PaintBrush] sync: PB_REQ received but host state not loaded yet, deferring\n")
+                -- Defer: retry after state loads
+                ExecuteWithDelay(5000, function()
+                    ExecuteInGameThread(function()
+                        if senderPC:IsValid() then
+                            print("[PaintBrush] sync: deferred PB_REQ, sending state now\n")
+                            sendStateTo(senderPC)
+                        end
+                    end)
+                end)
+            else
+                print("[PaintBrush] sync: PB_REQ received, sending state\n")
+                sendStateTo(senderPC)
+            end
         end
     end
 end)

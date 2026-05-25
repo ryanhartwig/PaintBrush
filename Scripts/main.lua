@@ -33,6 +33,7 @@ local function ensureStateLoaded()
     rebuildBrowseList()
     state.load()
     _stateLoaded = true
+    sync.setHostReady()
     print("[PaintBrush] State lazy-loaded\n")
 end
 
@@ -46,8 +47,8 @@ RegisterLoadMapPostHook(function(engine, world)
             rebuildBrowseList()
             state.load()
             _stateLoaded = true
-            -- Request state from host in case we're a client joining
-            sync.requestState()
+            sync.setHostReady()  -- allow PB_REQ responses now that state is loaded
+            sync.requestState()  -- request state from host in case we're a client
             print("[PaintBrush] State loaded for current save\n")
         end)
     end)

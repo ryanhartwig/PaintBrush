@@ -212,7 +212,7 @@ function state.save()
 
     local paintedCells = painter.getPaintedCells()
 
-    -- Build JSON-serialisable structure
+    -- Build JSON-serialisable structure (v2: map format "X,Y,Z" -> matPath)
     local basesData = {}
     for _, baseData in pairs(paintedCells) do
         local base = baseData.base
@@ -221,24 +221,17 @@ function state.save()
         local guidStr = guidString(base)
         if not guidStr then goto continue end
 
-        local cellsArr = {}
-        for _, c in ipairs(baseData.cells) do
-            table.insert(cellsArr, {
-                x   = c.cellCoords.X,
-                y   = c.cellCoords.Y,
-                z   = c.cellCoords.Z,
-                mat = c.materialPath,
-            })
-        end
+        local cellCount = 0
+        for _ in pairs(baseData.cells) do cellCount = cellCount + 1 end
 
-        if #cellsArr > 0 then
-            basesData[guidStr] = { cells = cellsArr }
+        if cellCount > 0 then
+            basesData[guidStr] = { cells = baseData.cells }
         end
 
         ::continue::
     end
 
-    local payload = { version = 1, bases = basesData }
+    local payload = { version = 2, bases = basesData }
     local jsonStr = json.encode(payload)
 
     -- Atomic write: write to .tmp, remove old, rename
@@ -306,21 +299,32 @@ function state.load()
         local savedBase = basesData[guidStr]
         if not savedBase or type(savedBase.cells) ~= "table" then goto nextBase end
 
-        -- Must match painter.lua's baseKey(): uses GetFullName() for stability
         local keyOk, key = pcall(function() return base:GetFullName() end)
         if not keyOk then key = tostring(base) end
-        local cells = {}
-        for _, c in ipairs(savedBase.cells) do
-            if type(c.x) == "number" and type(c.y) == "number" and type(c.z) == "number" and type(c.mat) == "string" then
-                table.insert(cells, {
-                    cellCoords   = { X = c.x, Y = c.y, Z = c.z },
-                    materialPath = c.mat,
-                })
+
+        -- Support both v1 (array of {x,y,z,mat}) and v2 (map "X,Y,Z" -> matPath)
+        local cellsMap = {}
+        local version = parsed.version or 1
+        if version >= 2 then
+            -- v2: cells is already a map {"X,Y,Z": "matPath"}
+            for ck, matPath in pairs(savedBase.cells) do
+                if type(ck) == "string" and type(matPath) == "string" then
+                    cellsMap[ck] = matPath
+                end
+            end
+        else
+            -- v1: cells is an array [{x,y,z,mat}]
+            for _, c in ipairs(savedBase.cells) do
+                if type(c.x) == "number" and type(c.y) == "number" and type(c.z) == "number" and type(c.mat) == "string" then
+                    cellsMap[string.format("%d,%d,%d", c.x, c.y, c.z)] = c.mat
+                end
             end
         end
 
-        if #cells > 0 then
-            newPaintedCells[key] = { base = base, cells = cells }
+        local hasAny = false
+        for _ in pairs(cellsMap) do hasAny = true; break end
+        if hasAny then
+            newPaintedCells[key] = { base = base, cells = cellsMap }
             table.insert(rebuiltBases, base)
         end
 
@@ -351,21 +355,14 @@ function state.serializeCurrentState()
         if not base or not base:IsValid() then goto continue end
         local guidStr = guidString(base)
         if not guidStr then goto continue end
-        local cellsArr = {}
-        for _, c in ipairs(baseData.cells) do
-            table.insert(cellsArr, {
-                x   = c.cellCoords.X,
-                y   = c.cellCoords.Y,
-                z   = c.cellCoords.Z,
-                mat = c.materialPath,
-            })
-        end
-        if #cellsArr > 0 then
-            basesData[guidStr] = { cells = cellsArr }
+        local cellCount = 0
+        for _ in pairs(baseData.cells) do cellCount = cellCount + 1 end
+        if cellCount > 0 then
+            basesData[guidStr] = { cells = baseData.cells }
         end
         ::continue::
     end
-    return json.encode({ version = 1, bases = basesData })
+    return json.encode({ version = 2, bases = basesData })
 end
 
 -- Apply state from a JSON string (received from host via network, no file I/O)
@@ -396,17 +393,25 @@ function state.applyFromJson(jsonStr)
 
         local keyOk, key = pcall(function() return base:GetFullName() end)
         if not keyOk then key = tostring(base) end
-        local cells = {}
-        for _, c in ipairs(savedBase.cells) do
-            if type(c.x) == "number" and type(c.y) == "number" and type(c.z) == "number" and type(c.mat) == "string" then
-                table.insert(cells, {
-                    cellCoords   = { X = c.x, Y = c.y, Z = c.z },
-                    materialPath = c.mat,
-                })
+        local cellsMap = {}
+        local version = parsed.version or 1
+        if version >= 2 then
+            for ck, matPath in pairs(savedBase.cells) do
+                if type(ck) == "string" and type(matPath) == "string" then
+                    cellsMap[ck] = matPath
+                end
+            end
+        else
+            for _, c in ipairs(savedBase.cells) do
+                if type(c.x) == "number" and type(c.y) == "number" and type(c.z) == "number" and type(c.mat) == "string" then
+                    cellsMap[string.format("%d,%d,%d", c.x, c.y, c.z)] = c.mat
+                end
             end
         end
-        if #cells > 0 then
-            newPaintedCells[key] = { base = base, cells = cells }
+        local hasAny = false
+        for _ in pairs(cellsMap) do hasAny = true; break end
+        if hasAny then
+            newPaintedCells[key] = { base = base, cells = cellsMap }
             table.insert(rebuiltBases, base)
         end
         ::nextBase::
