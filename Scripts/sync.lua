@@ -16,6 +16,7 @@ function sync.setSaveCallback(cb)
 end
 local _deferredRebuildScheduled = false
 local _debouncedRebuildScheduled = false  -- set by main.lua after state.load() completes
+local _hostDebouncedRebuildScheduled = false
 
 function sync.setHostReady()
     hostStateReady = true
@@ -352,9 +353,22 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             if not isLocal then
                 local base = getBaseByGuid(guid)
                 if base then
-                    painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
+                    painter.applyBatch(base, decodeCells(cellsStr), matPath, true, true)
                 end
                 if _onSaveNeeded then _onSaveNeeded() end
+                if not _hostDebouncedRebuildScheduled then
+                    _hostDebouncedRebuildScheduled = true
+                    ExecuteWithDelay(200, function()
+                        ExecuteInGameThread(function()
+                            _hostDebouncedRebuildScheduled = false
+                            for _, baseData in pairs(painter.getPaintedCells()) do
+                                if baseData.base and baseData.base:IsValid() then
+                                    pcall(painter.rebuild, baseData.base)
+                                end
+                            end
+                        end)
+                    end)
+                end
             end
             local tSave = os.clock()
             relayToOthers(MSG_RELAY_PAINT .. guid .. "|" .. cellsStr .. "|" .. matPath)
@@ -374,9 +388,22 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             if not isLocal then
                 local base = getBaseByGuid(guid)
                 if base then
-                    painter.eraseBatch(base, decodeCells(cellsStr), true)
+                    painter.eraseBatch(base, decodeCells(cellsStr), true, true)
                 end
                 if _onSaveNeeded then _onSaveNeeded() end
+                if not _hostDebouncedRebuildScheduled then
+                    _hostDebouncedRebuildScheduled = true
+                    ExecuteWithDelay(200, function()
+                        ExecuteInGameThread(function()
+                            _hostDebouncedRebuildScheduled = false
+                            for _, baseData in pairs(painter.getPaintedCells()) do
+                                if baseData.base and baseData.base:IsValid() then
+                                    pcall(painter.rebuild, baseData.base)
+                                end
+                            end
+                        end)
+                    end)
+                end
             end
             relayToOthers(MSG_RELAY_ERASE .. guid .. "|" .. cellsStr)
         end
