@@ -73,4 +73,9 @@ function textures.get(name)
     return cache[name]
 end
 
+function textures.invalidate()
+    cache = {}
+    anchor = nil
+end
+
 return textures
