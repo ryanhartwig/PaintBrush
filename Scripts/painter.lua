@@ -22,8 +22,16 @@ end
 painter.parseCellKey = parseCellKey
 
 -- Rebuild MaterialOverrides on a base from current paintedCells state
+-- Guard: prevent multiple rebuilds for the same base within 150ms (crash on slow PCs)
+local _lastRebuildTime = {}
+
 function painter.rebuild(base)
     local t0 = os.clock()
+    local key = baseKey(base)
+    if _lastRebuildTime[key] and (t0 - _lastRebuildTime[key]) < 0.15 then
+        return
+    end
+    _lastRebuildTime[key] = t0
 
     local arr = base.MaterialOverrides.Overrides
     local tAccess = os.clock()
@@ -249,6 +257,7 @@ end
 
 function painter.setPaintedCells(data)
     paintedCells = data or {}
+    _lastRebuildTime = {}
 end
 
 function painter.clearHistory()
