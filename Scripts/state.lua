@@ -217,14 +217,33 @@ function state.save()
 
     local paintedCells = painter.getPaintedCells()
 
+    -- Build fresh GUID lookup from current world state (base refs may be stale)
+    local guidByKey = {}
+    local allBases = FindAllOf("UWESculpturalBaseActor")
+    if allBases then
+        for _, base in ipairs(allBases) do
+            if base:IsValid() then
+                local keyOk, key = pcall(function() return base:GetFullName() end)
+                local guid = guidString(base)
+                if keyOk and guid then
+                    guidByKey[key] = guid
+                end
+            end
+        end
+    end
+
     -- Build JSON-serialisable structure (v2: map format "X,Y,Z" -> matPath)
     local basesData = {}
-    for _, baseData in pairs(paintedCells) do
-        local base = baseData.base
-        if not base or not base:IsValid() then goto continue end
-
-        local guidStr = guidString(base)
-        if not guidStr then goto continue end
+    for key, baseData in pairs(paintedCells) do
+        -- Look up GUID from live world state, fall back to stored ref
+        local guidStr = guidByKey[key]
+        if not guidStr and baseData.base and baseData.base:IsValid() then
+            guidStr = guidString(baseData.base)
+        end
+        if not guidStr then
+            print(string.format("[PaintBrush] state.save: skipping base (no GUID): %s\n", key:sub(1,60)))
+            goto continue
+        end
 
         local cellCount = 0
         for _ in pairs(baseData.cells) do cellCount = cellCount + 1 end
@@ -354,11 +373,26 @@ end
 -- Serialize current painted state to JSON string (no file I/O)
 function state.serializeCurrentState()
     local paintedCells = painter.getPaintedCells()
+
+    -- Fresh GUID lookup (same pattern as save)
+    local guidByKey = {}
+    local allBases = FindAllOf("UWESculpturalBaseActor")
+    if allBases then
+        for _, base in ipairs(allBases) do
+            if base:IsValid() then
+                local keyOk, key = pcall(function() return base:GetFullName() end)
+                local guid = guidString(base)
+                if keyOk and guid then guidByKey[key] = guid end
+            end
+        end
+    end
+
     local basesData = {}
-    for _, baseData in pairs(paintedCells) do
-        local base = baseData.base
-        if not base or not base:IsValid() then goto continue end
-        local guidStr = guidString(base)
+    for key, baseData in pairs(paintedCells) do
+        local guidStr = guidByKey[key]
+        if not guidStr and baseData.base and baseData.base:IsValid() then
+            guidStr = guidString(baseData.base)
+        end
         if not guidStr then goto continue end
         local cellCount = 0
         for _ in pairs(baseData.cells) do cellCount = cellCount + 1 end
