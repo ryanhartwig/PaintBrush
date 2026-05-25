@@ -307,7 +307,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             if not isLocal then
                 local base = findBaseByGuid(guid)
                 if base then
-                    painter.applyBatch(base, decodeCells(cellsStr), matPath)
+                    painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
                 end
             end
             state.save()
@@ -322,7 +322,7 @@ RegisterHook("/Script/Engine.PlayerController:ServerExecRPC", function(ctx, msgP
             if not isLocal then
                 local base = findBaseByGuid(guid)
                 if base then
-                    painter.eraseBatch(base, decodeCells(cellsStr))
+                    painter.eraseBatch(base, decodeCells(cellsStr), true)
                 end
             end
             state.save()
@@ -375,7 +375,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr and matPath then
             local base = findBaseByGuid(guid)
             if base then
-                painter.applyBatch(base, decodeCells(cellsStr), matPath)
+                painter.applyBatch(base, decodeCells(cellsStr), matPath, true)
                 print(string.format("[PaintBrush] sync: relayed paint %s\n", matPath:sub(-30)))
             end
         end
@@ -389,7 +389,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientMessage", function(_, sParam
         if guid and cellsStr then
             local base = findBaseByGuid(guid)
             if base then
-                painter.eraseBatch(base, decodeCells(cellsStr))
+                painter.eraseBatch(base, decodeCells(cellsStr), true)
                 print("[PaintBrush] sync: relayed erase\n")
             end
         end

@@ -81,7 +81,8 @@ function painter.apply(base, cellCoords, materialPath)
     painter.applyBatch(base, {cellCoords}, materialPath)
 end
 
-function painter.applyBatch(base, cellCoordsList, materialPath)
+-- skipUndo: true when applying remote actions (don't pollute local undo stack)
+function painter.applyBatch(base, cellCoordsList, materialPath, skipUndo)
     local key = baseKey(base)
 
     if not paintedCells[key] then
@@ -89,22 +90,24 @@ function painter.applyBatch(base, cellCoordsList, materialPath)
     end
     local baseData = paintedCells[key]
 
-    -- Record undo: snapshot previous state of ALL cells in the batch
-    local prevStates = {}
-    for _, coords in ipairs(cellCoordsList) do
-        local ck = cellKey(coords)
-        table.insert(prevStates, {
-            cellKey          = ck,
-            previousMaterial = baseData.cells[ck],
+    -- Record undo only for LOCAL actions
+    if not skipUndo then
+        local prevStates = {}
+        for _, coords in ipairs(cellCoordsList) do
+            local ck = cellKey(coords)
+            table.insert(prevStates, {
+                cellKey          = ck,
+                previousMaterial = baseData.cells[ck],
+            })
+        end
+        table.insert(undoStack, {
+            baseKey = key,
+            base    = base,
+            batch   = prevStates,
         })
-    end
-    table.insert(undoStack, {
-        baseKey = key,
-        base    = base,
-        batch   = prevStates,
-    })
-    if #undoStack > (require("config").MaxUndoStack or 50) then
-        table.remove(undoStack, 1)
+        if #undoStack > (require("config").MaxUndoStack or 50) then
+            table.remove(undoStack, 1)
+        end
     end
 
     -- Upsert all cells (O(1) per cell now!)
@@ -115,7 +118,7 @@ function painter.applyBatch(base, cellCoordsList, materialPath)
     painter.rebuild(base)
 end
 
-function painter.eraseBatch(base, cellCoordsList)
+function painter.eraseBatch(base, cellCoordsList, skipUndo)
     local key = baseKey(base)
 
     if not paintedCells[key] then return end
@@ -135,13 +138,15 @@ function painter.eraseBatch(base, cellCoordsList)
 
     if not anyPainted then return end
 
-    table.insert(undoStack, {
-        baseKey = key,
-        base    = base,
-        batch   = prevStates,
-    })
-    if #undoStack > (require("config").MaxUndoStack or 50) then
-        table.remove(undoStack, 1)
+    if not skipUndo then
+        table.insert(undoStack, {
+            baseKey = key,
+            base    = base,
+            batch   = prevStates,
+        })
+        if #undoStack > (require("config").MaxUndoStack or 50) then
+            table.remove(undoStack, 1)
+        end
     end
 
     for _, coords in ipairs(cellCoordsList) do

@@ -48,14 +48,7 @@ RegisterLoadMapPostHook(function(engine, world)
             state.load()
             _stateLoaded = true
             sync.setHostReady()
-            -- Request state from host (client joining). Retry after 5s in case
-            -- bases aren't loaded yet on either end.
             sync.requestState()
-            ExecuteWithDelay(5000, function()
-                ExecuteInGameThread(function()
-                    sync.requestState()
-                end)
-            end)
             print("[PaintBrush] State loaded for current save\n")
         end)
     end)
