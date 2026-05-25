@@ -4,13 +4,12 @@ config.ModDir = debug.getinfo(1, "S").source:match("@(.*/)")  .. "../"
 config.VERSION = "1.0.0"
 
 -- Defaults
+config.PickerKey = "B"
 config.PaintKey = "E"
 config.UndoKey = "Z"
 config.TraceDistance = 5000
 config.MaxUndoStack = 50
 config.AutoSave = true
-config.ShowMaterialPaths = false
-config.SwatchSize = 48
 
 local function loadConfig()
     local file = io.open(config.ModDir .. "config.txt", "r")

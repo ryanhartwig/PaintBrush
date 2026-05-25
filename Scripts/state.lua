@@ -193,9 +193,17 @@ function state.decodeJson(s)
     return json.decode(s)
 end
 
+-- Store state outside the mod folder so mod updates/reinstalls don't wipe user data.
+-- Location: <ue4ss>/PaintBrush/state/<slotName>.json
+local function getDataDir()
+    -- ModDir is <ue4ss>/Mods/PaintBrush/Scripts/../ = <ue4ss>/Mods/PaintBrush/
+    -- Go up two levels: Mods/PaintBrush/ → Mods/ → ue4ss/
+    return (config.ModDir or ""):gsub("[/\\]+$", ""):match("(.+[/\\])") :match("(.+[/\\])") .. "PaintBrush/"
+end
+
 function state.getSlotPath()
     local slotName = getSlotName()
-    return getModDir() .. "/state/" .. slotName .. ".json"
+    return getDataDir() .. "state/" .. slotName .. ".json"
 end
 
 local function guidString(base)
@@ -211,8 +219,8 @@ end
 function state.save()
     local slotPath = state.getSlotPath()
 
-    -- Ensure state directory exists
-    local stateDir = getModDir() .. "/state"
+    -- Ensure state directory exists (outside mod folder)
+    local stateDir = getDataDir() .. "state"
     os.execute('mkdir "' .. stateDir:gsub("/", "\\") .. '" 2>nul')
 
     local paintedCells = painter.getPaintedCells()

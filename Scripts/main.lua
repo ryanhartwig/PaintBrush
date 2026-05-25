@@ -20,28 +20,29 @@ local function isHost()
     return save and save:IsValid()
 end
 
--- Material cycling — rebuilt after map load when materials are available
-local browseMats = {}
-local selectedIdx = 1
-
-local function rebuildBrowseList()
-    materials.enumerate(true)  -- force re-scan
-    local allMats = materials.getAll()
-    browseMats = {}
-    for _, m in ipairs(allMats) do
-        if m.category ~= "zzz_Skip" then
-            table.insert(browseMats, m)
-        end
-    end
-    selectedIdx = 1
-    print(string.format("[PaintBrush] %d browseable materials (filtered from %d)\n", #browseMats, #allMats))
+local function reloadMaterials()
+    materials.enumerate(true)
+    print(string.format("[PaintBrush] %d materials loaded\n", #materials.getAll()))
 end
 
 -- Ensure state is loaded before any paint/erase operation.
 -- Handles both initial game load AND mod restart (where RegisterLoadMapPostHook doesn't fire).
+local function refreshModSettings()
+    pcall(function()
+        if not ModRef then return end
+        local ok, val = pcall(function()
+            return ModRef:GetSharedVariable("SN2ModSettings/PaintBrush/max_undo")
+        end)
+        if ok and val ~= nil and type(val) == "number" then
+            config.MaxUndoStack = math.floor(val + 0.5)
+        end
+    end)
+end
+
 local function ensureStateLoaded()
     if _stateLoaded then return end
-    rebuildBrowseList()
+    reloadMaterials()
+    refreshModSettings()
     if isHost() then
         state.load()
         sync.setHostReady()
@@ -60,7 +61,7 @@ RegisterLoadMapPostHook(function(engine, world)
         ExecuteInGameThread(function()
             painter.setPaintedCells({})
             painter.clearHistory()
-            rebuildBrowseList()
+            reloadMaterials()
             if isHost() then
                 state.load()
                 sync.setHostReady()
@@ -74,48 +75,22 @@ RegisterLoadMapPostHook(function(engine, world)
     end)
 end)
 
--- Last material selected via UI (takes priority over L/K cycling)
+-- Last material selected via UI
 local lastSelectedPath = nil
 local lastSelectedName = nil
 
 local function getSelectedMaterial()
-    if lastSelectedPath then return lastSelectedPath, lastSelectedName end
-    if #browseMats == 0 then return nil, nil end
-    local m = browseMats[selectedIdx]
-    return m.path, m.name
+    return lastSelectedPath, lastSelectedName
 end
 
 local function getBrushRadius()
     return ui.getBrushRadius()
 end
 
-local function printSelected()
-    local m = browseMats[selectedIdx]
-    print(string.format("[PaintBrush] [%d/%d] [%s] %s | Brush: %s\n",
-        selectedIdx, #browseMats, m.category, m.name, BRUSH_LABELS[brushIdx]))
-end
-
--- L = next material, K = previous material
-RegisterKeyBind(Key.L, function()
-    ExecuteInGameThread(function()
-        selectedIdx = selectedIdx + 1
-        if selectedIdx > #browseMats then selectedIdx = 1 end
-        printSelected()
-    end)
-end)
-
-RegisterKeyBind(Key.K, function()
-    ExecuteInGameThread(function()
-        selectedIdx = selectedIdx - 1
-        if selectedIdx < 1 then selectedIdx = #browseMats end
-        printSelected()
-    end)
-end)
-
--- O = open material picker UI
+-- B = open material picker UI
 local pendingTarget = nil  -- stores detection info while UI is open
 
-RegisterKeyBind(Key.B, function()
+RegisterKeyBind(Key[config.PickerKey], function()
     ExecuteInGameThread(function()
         if ui.isOpen() then
             ui.close()
@@ -260,5 +235,35 @@ RegisterKeyBind(Key[config.UndoKey], function()
     end)
 end)
 
-print(string.format("[PaintBrush] v%s loaded. O=picker, P=paint, Z=undo, L/K=material, J/H=brush\n", config.VERSION))
-print("[PaintBrush] Materials will load after world is ready\n")
+-- ============================================================
+-- SN2ModSettings integration (optional — no dependency)
+-- ============================================================
+pcall(function()
+    local enabledFile = io.open(config.ModDir .. "../SN2ModSettings/enabled.txt", "r")
+    if not enabledFile then return end
+    enabledFile:close()
+
+    local regDir = config.ModDir .. "../SN2ModSettings/registrations/"
+    os.execute('mkdir "' .. regDir:gsub("/", "\\") .. '" 2>nul')
+
+    local manifest = [[return {
+    name     = "PaintBrush",
+    display  = "PaintBrush",
+    version  = "]] .. config.VERSION .. [[",
+    github   = "ryanhartwig/PaintBrush",
+    settings = {
+        { key="max_undo", title="Max Undo Steps",
+          description="Number of paint actions kept in undo history.",
+          type="slider", default=50, min=10, max=200, step=10, format="integer" },
+    },
+}]]
+
+    local f = io.open(regDir .. "PaintBrush.lua", "w")
+    if f then
+        f:write(manifest)
+        f:close()
+        print("[PaintBrush] SN2ModSettings manifest written\n")
+    end
+end)
+
+print(string.format("[PaintBrush] v%s loaded. B=picker, E=paint, Z=undo\n", config.VERSION))

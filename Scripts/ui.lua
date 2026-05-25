@@ -219,7 +219,10 @@ local eraserButton = nil
 local favourites = {}  -- set: { [materialPath] = true }
 
 local function getFavouritesPath()
-    return config.ModDir .. "favourites.txt"
+    -- Store outside mod folder (survives mod reinstall)
+    local dataDir = (config.ModDir or ""):gsub("[/\\]+$", ""):match("(.+[/\\])"):match("(.+[/\\])") .. "PaintBrush/"
+    os.execute('mkdir "' .. dataDir:gsub("/", "\\") .. '" 2>nul')
+    return dataDir .. "favourites.txt"
 end
 
 local function loadFavourites()
@@ -483,15 +486,11 @@ local function buildUI(onApply, onSelect)
             table.insert(navButtons, btn)
         end
 
-        -- Subcategory header slots (max 6 categories visible per page)
-        for i = 1, 6 do
-            local header = makeText(root, "", {size=11, opacity=0.35})
-            table.insert(subcatHeaders, header)
-        end
-
         -- Material row slots
         for i = 1, PAGE_SIZE do
             local row = makeHBox(root)
+            local catText = makeText(root, "", {size=12, opacity=0.35})
+            row:AddChildToHorizontalBox(catText)
             local nameText = makeText(root, "")
             row:AddChildToHorizontalBox(nameText)
 
@@ -511,7 +510,7 @@ local function buildUI(onApply, onSelect)
 
             listVBox:AddChild(row)
             table.insert(rowPool, {
-                row = row, nameText = nameText,
+                row = row, catText = catText, nameText = nameText,
                 favBtn = favBtn, applyBtn = applyBtn, selectBtn = selectBtn,
             })
         end
@@ -563,16 +562,10 @@ local function buildUI(onApply, onSelect)
             end
         end
 
-        -- Hide all subcategory headers first
-        for _, h in ipairs(subcatHeaders) do
-            pcall(function() h:SetVisibility(1) end)
-        end
-
         -- Material rows
         local startIdx = (currentPage - 1) * PAGE_SIZE + 1
         local endIdx = math.min(startIdx + PAGE_SIZE - 1, #filteredMats)
         local lastSubcat = nil
-        local headerIdx = 0
 
         for slot = 1, PAGE_SIZE do
             local pool = rowPool[slot]
@@ -582,34 +575,32 @@ local function buildUI(onApply, onSelect)
                 local mat = filteredMats[i]
                 pcall(function() pool.row:SetVisibility(0) end)
 
-                -- Subcategory header
-                if isCuratedMode() or isFavouritesMode() or isShowAll() then
+                local MAX_NAME_LEN = 40
+                local isSelected = (mat.path == selectedMaterialPath)
+                local label = materials.getCuratedLabel(mat.name)
+
+                if #label > MAX_NAME_LEN then
+                    label = "..." .. label:sub(-(MAX_NAME_LEN - 3))
+                end
+                if isSelected then label = label .. "  <<<" end
+
+                -- Category prefix (separate widget, dimmer)
+                local showCat = isCuratedMode() or isFavouritesMode() or isShowAll()
+                if showCat then
                     local subcat = materials.getCuratedSubcategory(mat.name)
-                    if subcat ~= lastSubcat then
-                        lastSubcat = subcat
-                        headerIdx = headerIdx + 1
-                        if headerIdx <= #subcatHeaders then
-                            local h = subcatHeaders[headerIdx]
-                            pcall(function()
-                                h:SetText(FText("— " .. subcat .. " —"))
-                                h:SetVisibility(0)
-                            end)
-                            -- Move header before this row (can't reorder, but visibility is enough)
-                        end
-                    end
+                    if subcat ~= lastSubcat then lastSubcat = subcat end
+                    pcall(function()
+                        pool.catText:SetText(FText("[" .. subcat .. "]  "))
+                        pool.catText:SetVisibility(0)
+                        pool.catText:SetRenderOpacity(0.35)
+                    end)
+                else
+                    pcall(function() pool.catText:SetVisibility(1) end)
                 end
 
-                -- Update name
-                local MAX_NAME_LEN = 45
-                local isSelected = (mat.path == selectedMaterialPath)
-                local displayName = materials.getCuratedLabel(mat.name)
-                if #displayName > MAX_NAME_LEN then
-                    displayName = "..." .. displayName:sub(-(MAX_NAME_LEN - 3))
-                end
-                if isSelected then displayName = displayName .. "  <<<" end
                 pcall(function()
-                    pool.nameText:SetText(FText(displayName))
-                    pool.nameText:SetRenderOpacity(isSelected and 1.0 or 0.6)
+                    pool.nameText:SetText(FText(label))
+                    pool.nameText:SetRenderOpacity(isSelected and 1.0 or 0.75)
                 end)
 
                 -- Update FAV button text
@@ -638,6 +629,7 @@ local function buildUI(onApply, onSelect)
             else
                 -- Hide unused rows
                 pcall(function() pool.row:SetVisibility(1) end)
+                pcall(function() pool.catText:SetVisibility(1) end)
             end
         end
     end
@@ -667,7 +659,7 @@ function ui.open(onApply, onSelect)
     onApplyCallback = onApply
     onSelectCallback = onSelect
 
-    -- First open: build everything. Subsequent opens: reuse cached widget as-is.
+    -- First open: build everything + add to viewport. Subsequent: just show.
     if not rootWidget then
         loadFavourites()
         local root = buildUI(onApply, onSelect)
@@ -676,9 +668,10 @@ function ui.open(onApply, onSelect)
             return
         end
         rootWidget = root
+        rootWidget:AddToViewport(200)
+    else
+        pcall(function() rootWidget:SetVisibility(0) end)  -- 0 = Visible
     end
-
-    rootWidget:AddToViewport(200)
 
     -- Switch to UI-only input
     local pc = UEHelpers:GetPlayerController()
@@ -713,9 +706,9 @@ function ui.close()
         modalBlocker = nil
     end
 
-    -- Hide widget (don't destroy — reuse on next open)
+    -- Hide widget (stays in viewport to prevent GC, just invisible)
     if rootWidget then
-        pcall(function() rootWidget:RemoveFromViewport() end)
+        pcall(function() rootWidget:SetVisibility(1) end)  -- 1 = Collapsed
     end
 
     -- Restore game input
@@ -738,6 +731,7 @@ end
 function ui.invalidateCache()
     if rootWidget then
         pcall(function() rootWidget:RemoveFromViewport() end)
+        pcall(function() rootWidget:SetVisibility(1) end)
     end
     rootWidget = nil
     buttonActions = {}
@@ -759,6 +753,8 @@ end
 
 function ui.setSelectedMaterial(path)
     selectedMaterialPath = path
+    -- Refresh display to update highlight (<<< indicator)
+    if renderPage then renderPage() end
 end
 
 -- ============================================================
