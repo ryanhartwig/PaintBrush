@@ -664,6 +664,8 @@ function ui.open(onApply, onSelect)
     onApplyCallback = onApply
     onSelectCallback = onSelect
 
+    _hookDisabled = false  -- re-enable button hook for this session
+
     -- First open: build everything + add to viewport. Subsequent: just show.
     if not rootWidget then
         loadFavourites()
@@ -675,7 +677,7 @@ function ui.open(onApply, onSelect)
         rootWidget = root
         rootWidget:AddToViewport(200)
     else
-        pcall(function() rootWidget:SetVisibility(0) end)  -- 0 = Visible
+        pcall(function() rootWidget:SetVisibility(0) end)
     end
 
     -- Switch to UI-only input
@@ -713,8 +715,9 @@ function ui.close()
 
     -- Hide widget (stays in viewport to prevent GC, just invisible)
     if rootWidget then
-        pcall(function() rootWidget:SetVisibility(1) end)  -- 1 = Collapsed
+        pcall(function() rootWidget:SetVisibility(1) end)
     end
+    _hookDisabled = true  -- prevent button hook from firing on cached widgets during exit
 
     -- Restore game input
     local pc = UEHelpers:GetPlayerController()
