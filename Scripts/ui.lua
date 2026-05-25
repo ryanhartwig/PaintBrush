@@ -64,10 +64,8 @@ local function makeText(outer, str, opts)
     local opacity = opts.opacity or 0.6
     if gameFont then
         pcall(function()
-            local f = {}
-            for k, v in pairs(gameFont) do f[k] = v end
-            f.Size = size
-            tb:SetFont(f)
+            gameFont.Size = size
+            tb:SetFont(gameFont)
         end)
     end
     pcall(function() tb:SetRenderOpacity(opacity) end)
