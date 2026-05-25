@@ -62,9 +62,12 @@ local _worldReady = false  -- false during map load transition, prevents undo on
 
 -- Auto-load paint state when a map loads (handles initial load + save reload)
 local _lastLoadedSlot = nil
+local _mapLoadGeneration = 0  -- incremented on each map load; stale callbacks bail out
 
 RegisterLoadMapPostHook(function(engine, world)
     _worldReady = false  -- block undo/paint during transition
+    _mapLoadGeneration = _mapLoadGeneration + 1
+    local gen = _mapLoadGeneration
     -- Flush any pending save NOW before state gets wiped
     if _saveTimer and _isHostCached then
         pcall(state.save)
@@ -77,6 +80,9 @@ RegisterLoadMapPostHook(function(engine, world)
 
     ExecuteWithDelay(3000, function()
         ExecuteInGameThread(function()
+            -- Bail if a newer map load happened or game is shutting down
+            if gen ~= _mapLoadGeneration then return end
+
             -- Check if this is actually a new world or just a client joining our session
             local currentSlot = nil
             pcall(function()
@@ -108,6 +114,7 @@ RegisterLoadMapPostHook(function(engine, world)
             _worldReady = true
             -- Request state from host. Retry at 8s and 16s only if no state received yet.
             local function requestIfEmpty()
+                if gen ~= _mapLoadGeneration then return end
                 local cells = painter.getPaintedCells()
                 local hasAny = false
                 for _ in pairs(cells) do hasAny = true; break end
